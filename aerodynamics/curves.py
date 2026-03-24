@@ -50,28 +50,27 @@ class Point:
 Bezier Curve class for curve design
 '''
 class BezierCurve():
-    def __init__(self, control_points, ps_ss=None):
+    def __init__(self, control_points, resolution, ps_ss=None):
         self.control_points = control_points
-        self.positions = []
+        self.resolution = resolution
         self.ps_ss = ps_ss
         self.degree = len(self.control_points) - 1
 
+    @property
+    def positions(self): return self.get_positions()
 
-    def get_positions(self, parameters):
-        '''
-        Returns positions based on the parameters given
-        '''
+    def get_positions(self):
+        ''' Returns positions based on the parameters given '''
         # Returns the bernstein polynomial coefficient
         def basis_polynomial(parameter, iterator):
             binomial_coefficient = math.factorial(self.degree) / (math.factorial(iterator) * math.factorial(self.degree - iterator))
 
             return binomial_coefficient * (parameter**iterator) * ((1 - parameter)**(self.degree - iterator))
 
-        # Clear any existing positions
-        self.positions.clear()
+        positions = []
 
         # Iterate Through Each Parameter Step
-        for t in parameters:
+        for t in numpy.linspace(0, 1, self.resolution):
             position = Point(0, 0)
 
             # Apply the effects of each control point to the parameter
@@ -79,15 +78,13 @@ class BezierCurve():
                 position += point.scalar_mul(basis_polynomial(t, self.degree, idx))
 
             # Store the position
-            self.positions.append(position)
+            positions.append(position)
 
-        return self.positions
+        return positions
 
 
+    ''' Plots the positions on the curve '''
     def plot_points(self):
-        '''
-        Plots the positions on the curve
-        '''
         if len(self.positions) == 0:
             print("No positions have been generated. Parameter(s) must be provided")
             return
@@ -99,7 +96,7 @@ class BezierCurve():
 
 
 '''
-Create a BSpline curve using the Cox-de Boor recursion formula  based on basis coefficients
+Create a BSpline curve using the Cox-de Boor recursion formula based on basis coefficients
 NOTE: This program currently assumes a uniform knot vector. Different types of knot vectors must be accounted for
 '''
 class BSpline():
@@ -146,10 +143,8 @@ class BSpline():
 
         return self.positions
 
+    ''' Plots the spline points.  '''
     def plot_points(self):
-        '''
-        Plots the spline points.
-        '''
         if len(self.positions) == 0:
             print("No positions have been generated. Parameter(s) must be provided")
             return
@@ -166,57 +161,3 @@ class BSpline():
         plt.scatter(control_x, control_y)
         plt.show()
 
-'''
-""" BSpline code from ChatGPT """
-def find_knot_span(u, degree, knots, n):
-    """Find the knot span index for parameter u."""
-    if u >= knots[n + 1]:  # Clamp to last span
-        return n
-    if u <= knots[degree]:  # Clamp to first span
-        return degree
-    for i in range(degree, n + 1):
-        if knots[i] <= u < knots[i + 1]:
-            return i
-    raise ValueError("Parameter u is out of bounds.")
-
-def de_boor(u, degree, knots, control_points):
-    """Evaluate B-spline curve at parameter u using De Boor's algorithm."""
-    n = len(control_points) - 1
-    k = find_knot_span(u, degree, knots, n)
-
-    d = [np.array(control_points[j]) for j in range(k - degree, k + 1)]
-
-    for r in range(1, degree + 1):
-        for j in range(degree, r - 1, -1):
-            i = k - degree + j
-            denom = knots[i + degree - r + 1] - knots[i]
-            alpha = (u - knots[i]) / denom if denom != 0 else 0
-            d[j] = (1.0 - alpha) * d[j - 1] + alpha * d[j]
-
-    return d[degree]
-
-
-degree = 3
-control_points = [(0, 0), (1, 2), (3, 5), (6, 5), (7, 2), (8, 0)]
-n = len(control_points) - 1
-
-# Normalized, clamped uniform knot vector
-knots = [0] * (degree + 1) + list(np.linspace(0, 1, n - degree + 1)) + [1] * (degree + 1)
-
-# Evaluate B-spline at 100 points
-curve = [de_boor(u, degree, knots, control_points) for u in np.linspace(0, 1, 100)]
-
-# Optional plot
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    x_vals, y_vals = zip(*curve)
-    ctrl_x, ctrl_y = zip(*control_points)
-
-    plt.plot(x_vals, y_vals, label="B-spline Curve")
-    plt.plot(ctrl_x, ctrl_y, 'o--', label="Control Polygon")
-    plt.legend()
-    plt.axis('equal')
-    plt.title("B-spline Curve (Robust De Boor)")
-    plt.show()
-'''

@@ -16,6 +16,78 @@ from atmosphere import Ambient
 
 ''' classes for thin airfoil theory '''
 ''' Numerical Thin Airfoil Theory using Weissinger's Approximation '''
+
+class NACA:
+    def __init__(self, designation, chord=None, num_points=None):
+        self.chord = chord
+        self.num_points = num_points
+        self.designation = designation
+        if len(self.designation) == 4:
+            self.digit = 4
+            self.M = int(self.designation[0]) / 100
+            self.P = int(self.designation[1]) / 10
+            self.XX = int(self.designation[2:4]) / 100
+        elif len(self.designation) == 5:
+            self.digit = 5
+            self.L = int(self.designation[0]) / 100
+            self.P = int(self.designation[1]) / 100
+            self.Q = int(self.designation[2]) / 100
+            self.XX = int(self.designation[3:5]) / 100
+
+    def get_upper(self, x_c):
+        match self.digit:
+            case 4:
+                z_c, dz_dx = self.get_camber(x_c)
+                z_t = self.XX * 5 * (0.2969 * numpy.sqrt(x_c) - 0.126 * x_c - 0.3516*x_c**2 + 0.2843*x_c**3 - 0.1015*x_c**4)
+                theta = numpy.atan(dz_dx)
+                x_u = x_c - z_t/2 * numpy.sin(theta)
+                z_u = z_c + z_t/2 * numpy.cos(theta)
+
+        return x_u, z_u
+
+    def get_lower(self, x_c):
+        match self.digit:
+            case 4:
+                z_c, dz_dx = self.get_camber(x_c)
+                z_t = self.XX * 5 * (0.2969 * numpy.sqrt(x_c) - 0.126 * x_c - 0.3516*x_c**2 + 0.2843*x_c**3 - 0.1015*x_c**4)
+                theta = numpy.atan(dz_dx)
+                x_u = x_c + z_t/2 * numpy.sin(theta)
+                z_u = z_c - z_t/2 * numpy.cos(theta)
+
+        return x_u, z_u
+
+    def get_camber(self, x_c):
+        # input x/c instead of x-coordinates to get the chord-normalized z-coordinates
+        match self.digit:
+            case 4:
+                ''' 4-digit Airfoil equations referenced from Airfoil Tools '''
+                z_c = (self.M/self.P**2) * (2*self.P*x_c - x_c**2)
+                dz_dx = (2*self.M/self.P**2) * (self.P - x_c)
+            case 5:
+                pass
+        
+        return z_c, dz_dx
+
+    def plot_airfoil(self):
+        if self.num_points is not None:
+            x_values = numpy.linspace(0, 1, self.num_points)
+            upper_z = numpy.vectorize(self.get_upper)(x_values)[1]
+            upper_x = numpy.vectorize(self.get_upper)(x_values)[0]
+            lower_x = numpy.vectorize(self.get_lower)(x_values)[0]
+            lower_z = numpy.vectorize(self.get_lower)(x_values)[1]
+            camber_z = numpy.vectorize(self.get_camber)(x_values)[0]
+            fig, ax = plt.subplots()
+            ax.plot(upper_x, upper_z)
+            ax.plot(lower_x, lower_z)
+            ax.plot(x_values, camber_z)
+            ax.set_aspect("equal")
+            plt.show()
+        else:
+            print("No point resolution provided (""num_points"" attribute).")
+            return
+
+            
+
 class Panel:
     def __init__(self, start_point:Point, end_point:Point):
         self.start_point = copy.deepcopy(start_point)
@@ -49,17 +121,16 @@ class Panel:
     def beta(self):
         return self.phi + (numpy.pi / 2)
     
-class Thin_Airfoil:
-    def __init__(self, designation:str, chord, num_panels, flap_angle=0, flap_start=None):
-        self.designation = designation
+class Thin_Airfoil(NACA):
+    def __init__(self, designation:str, chord, num_panels, flap_angle=0, flap_start=None, ambient=None):
+        super().__init__(designation)
         self.num_panels = num_panels
         self.chord = chord
-        self.M = int(self.designation[0]) / 100
-        self.P = int(self.designation[1]) / 10
         self.flap_angle = flap_angle
         self.flap_start = flap_start
+        self.ambient = ambient
         self.panels = self.generate_panels()
-
+        
     def generate_panels(self):
         x_positions = numpy.linspace(0, 1, self.num_panels + 1)
         z_positions = numpy.array([self.get_camber(x)[0] for x in x_positions])
@@ -100,27 +171,32 @@ class Thin_Airfoil:
         return panels
 
     def get_camber(self, x_c):
-        ''' Equations referenced from Airfoil Tools '''
         # input x/c instead of x-coordinates to get the chord-normalized z-coordinates
-        if 0 <= x_c < self.P:
-            z_c = (self.M/self.P**2) * (2*self.P*x_c - x_c**2)
-            dz_dx = (2*self.M/self.P**2) * (self.P - x_c)
-        elif self.flap_start == None and self.P <= x_c <= 1:
-            z_c = (self.M/(1 - self.P)**2) * (1 - 2*self.P + 2*self.P*x_c - x_c**2)
-            dz_dx = (2*self.M/(1 - self.P)**2) * (self.P - x_c)
-        elif self.flap_start != None and self.P <= x_c <= self.flap_start:
-            z_c = (self.M/(1 - self.P)**2) * (1 - 2*self.P + 2*self.P*x_c - x_c**2)
-            dz_dx = (2*self.M/(1 - self.P)**2) * (self.P - x_c)
-        elif self.flap_start != None and self.flap_start < x_c <= 1:
-            flap_start_height = (self.M/(1 - self.P)**2) * (1 - 2*self.P + 2*self.P*self.flap_start - self.flap_start**2) # b
-            dz_dx = numpy.tan(-self.flap_angle) # m
-            z_c = dz_dx*(x_c - self.flap_start) + flap_start_height # mx + b
-        else: return None
+        match self.digit:
+            case 4:
+                ''' 4-digit Airfoil equations referenced from Airfoil Tools '''
+                if 0 <= x_c < self.P:
+                    z_c = (self.M/self.P**2) * (2*self.P*x_c - x_c**2)
+                    dz_dx = (2*self.M/self.P**2) * (self.P - x_c)
+                elif self.flap_start == None and self.P <= x_c <= 1:
+                    z_c = (self.M/(1 - self.P)**2) * (1 - 2*self.P + 2*self.P*x_c - x_c**2)
+                    dz_dx = (2*self.M/(1 - self.P)**2) * (self.P - x_c)
+                elif self.flap_start != None and self.P <= x_c <= self.flap_start:
+                    z_c = (self.M/(1 - self.P)**2) * (1 - 2*self.P + 2*self.P*x_c - x_c**2)
+                    dz_dx = (2*self.M/(1 - self.P)**2) * (self.P - x_c)
+                elif self.flap_start != None and self.flap_start < x_c <= 1:
+                    flap_start_height = (self.M/(1 - self.P)**2) * (1 - 2*self.P + 2*self.P*self.flap_start - self.flap_start**2) # b
+                    dz_dx = numpy.tan(-self.flap_angle) # m
+                    z_c = dz_dx*(x_c - self.flap_start) + flap_start_height # mx + b
+                else: return None
+            case 5:
+                pass
         
         return z_c, dz_dx
-    
+
+
     @property
-    def lift(self, ambient:Ambient):
+    def lift(self):
 
         # Camber slopes at the points of tangency (three quarter point on panel)
         slopes = numpy.array([self.get_camber(position.x_coord)[1] for position in self.three_quarter_points[0]]) 
@@ -135,17 +211,17 @@ class Thin_Airfoil:
 
         # Apply Weissinger's Approximation in matrix form
         A = panel_lengths / (2*numpy.pi*r) * (numpy.sin(theta) - numpy.cos(theta)*slopes) # vertical velocities minus horizontal velocities
-        b = numpy.transpose(ambient.Vinf*(numpy.cos(ambient.alpha)*slopes - numpy.sin(ambient.alpha)))
+        b = numpy.transpose(self.ambient.Vinf*(numpy.cos(self.ambient.alpha)*slopes - numpy.sin(self.ambient.alpha)))
 
         # Lift
         gamma_distribution = numpy.linalg.solve(A, b) # distribution of length-specific vortex strengths
-        Vz = ambient.Vinf*numpy.sin(ambient.alpha) + numpy.sum(((panel_lengths*gamma_distribution) / (2*numpy.pi*r)) * numpy.sin(slopes), axis=0)
-        Vx = ambient.Vinf*numpy.cos(ambient.alpha) + numpy.sum(((panel_lengths*gamma_distribution) / (2*numpy.pi*r)) * numpy.cos(slopes), axis=0)
+        Vz = self.ambient.Vinf*numpy.sin(self.ambient.alpha) + numpy.sum(((panel_lengths*gamma_distribution) / (2*numpy.pi*r)) * numpy.sin(slopes), axis=0)
+        Vx = self.ambient.Vinf*numpy.cos(self.ambient.alpha) + numpy.sum(((panel_lengths*gamma_distribution) / (2*numpy.pi*r)) * numpy.cos(slopes), axis=0)
         V = numpy.vectorize(numpy.sqrt)(Vx**2 + Vz**2)
-        Cp = 1 - (V/ambient.Vinf)**2
-        L = float(ambient.rhoinf * ambient.Vinf * sum(gamma_distribution * panel_lengths[0]))
-        L_prime = ambient.rhoinf * ambient.Vinf * gamma_distribution * panel_lengths[0]
-        Cl = float(L / ((1/2)*ambient.rhoinf*ambient.Vinf**2))
+        Cp = 1 - (V/self.ambient.Vinf)**2
+        L = float(self.ambient.rhoinf * self.ambient.Vinf * sum(gamma_distribution * panel_lengths[0]))
+        L_prime = self.ambient.rhoinf * self.ambient.Vinf * gamma_distribution * panel_lengths[0]
+        Cl = float(L / ((1/2)*self.ambient.rhoinf*self.ambient.Vinf**2))
 
         return L, Cl, L_prime, Cp
     
@@ -162,7 +238,7 @@ class Thin_Airfoil:
         return cmc4
 
     def plot_results(self):
-        fig, [ax0, ax1, ax2, ax3] = plt.subplots(2, 2, figsize=(12, 5))
+        fig, ax = plt.subplots(4, 1, figsize=(12, 5))
 
         # Camberline
         x_positions = list()
@@ -177,26 +253,26 @@ class Thin_Airfoil:
         control_y = [point.y_coord for point in self.quarter_points.flatten()]
         vortex_x = [point.x_coord for point in self.three_quarter_points.flatten()]
         vortex_y = [point.y_coord for point in self.three_quarter_points.flatten()]
-        ax0.scatter(control_x, control_y, color="blue", label="Control Points")
-        ax0.scatter(vortex_x, vortex_y, color="red", label="Flow Tangency Points")
-        ax0.scatter(x_positions, y_positions, color='green', label="Endpoints")
-        ax0.plot(x_positions, y_positions)
-        ax0.xlim(0, 1)
-        ax0.ylim(-0.2, 0.2)
-        ax0.legend()
+        ax[0].scatter(control_x, control_y, color="blue", label="Control Points")
+        ax[0].scatter(vortex_x, vortex_y, color="red", label="Flow Tangency Points")
+        ax[0].scatter(x_positions, y_positions, color='green', label="Endpoints")
+        ax[0].plot(x_positions, y_positions)
+        ax[0].set_xlim(0, 1)
+        ax[0].set_ylim(-0.2, 0.2)
+        ax[0].legend()
 
         _, _, L_prime, Cp = self.lift
         x_c = numpy.transpose(numpy.array([point.x_coord for point in self.three_quarter_points[0]]))
         
         # Lift Distribution
-        ax1.plot(x_c, L_prime, label="L_prime")
-        if self.flap_start != None: ax1.title("Flapped " + self.designation + " Lift Distribution")
-        else: ax1.title(self.designation + " Lift Distribution")
+        ax[1].plot(x_c, L_prime, label="L_prime")
+        if self.flap_start != None: ax[1].title("Flapped " + self.designation + " Lift Distribution")
+        else: ax[1].set_title(self.designation + " Lift Distribution")
 
         # Pressure Distribution
-        ax2.plot(x_c, Cp, label="Cp")
-        if self.flap_start != None: ax2.title("Flapped " + self.designation + " Pressure Distribution")
-        else: ax2.title(self.designation + " Pressure Distribution")
+        ax[2].plot(x_c, Cp, label="Cp")
+        if self.flap_start != None: ax[2].title("Flapped " + self.designation + " Pressure Distribution")
+        else: ax[2].set_title(self.designation + " Pressure Distribution")
 
         plt.show()
 

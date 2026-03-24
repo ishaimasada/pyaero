@@ -2,12 +2,12 @@ import numpy
 import os
 import cantera
 
+import matplotlib.pyplot as plt
+
 # Change the current working directory to the file location
 filepath = os.path.abspath(__file__)
 directory = os.path.dirname(filepath)
 os.chdir(directory)
-
-from atmosphere import *
 
 # General iteration function
 def iterate(function_name, LHS, guess=None):
@@ -22,12 +22,12 @@ def iterate(function_name, LHS, guess=None):
         error = abs(LHS - RHS) / LHS
     return guess
 
+
 def bisection(function_name, guess_max, guess_min):
     error_threshold = 10**-4
-    max_iter=100
+    max_iter = 100
     fmax, fmin = function_name(guess_max), function_name(guess_min)
-    if fmax * fmin > 0:
-        raise ValueError("f(a) and f(b) must have opposite signs.")
+    if fmax * fmin > 0: raise ValueError("f(a) and f(b) must have opposite signs.")
 
     for _ in range(max_iter):
         guess_mid = 0.5 * (guess_max + guess_min)
@@ -106,7 +106,7 @@ def normal_shock(parameter, gamma, lookup_key="M"):
         T2_T1 = (2*gamma*M0**2 - (gamma - 1)) * ((gamma - 1)*M0**2 + 2) / ((gamma + 1)**2 * M0**2)
         return T2_T1
     def get_Pt2_Pt1(M0):
-        Pt2_Pt1 = ((gamma + 1) * M0**2 / ((gamma + 1)*M0**2 + 2))**(gamma / (gamma - 1)) * ((gamma + 1) / ((2*gamma*M0) - (gamma - 1)))**(1 / (gamma - 1))
+        Pt2_Pt1 = ((gamma + 1) * M0**2 / ((gamma - 1)*M0**2 + 2))**(gamma / (gamma - 1)) * ((gamma + 1) / ((2*gamma*M0**2) - (gamma - 1)))**(1 / (gamma - 1))
         return Pt2_Pt1
     def get_Pt2_P1(M0):
         Pt2_P1 = (((((gamma + 1)**2)*M0**2) / (4*gamma*M0**2 - 2*(gamma - 1)))**(gamma / (gamma + 1))) * ((1 - gamma + 2*gamma*M0**2) / (gamma + 1))
@@ -365,28 +365,28 @@ def two_dimension_airofil(M_freestream, thetas):
     Machs, nus = numpy.vectorize(expansion_fan)(M_freestream, deflection_angles)
     '''
 
-def integrate_TM(theta_s, M0, gamma):
-    # Runge-Kutta solution to Taylor-Maccoll equation for flowfield between shock and cone surface
+def get_TM_velocities(theta, Vr, Vtheta, h):
     def get_Vr_double_prime(theta, Vr, Vtheta):
         return (Vr * (Vtheta**2) - ((gamma - 1) / 2) * (1 - Vr**2 - Vtheta**2) * (2*Vr + Vtheta * (1 / numpy.tan(theta)))) / (((gamma - 1) / 2) * (1 - Vr**2 - Vtheta**2) - Vtheta**2)
     
-    def get_velocities(theta, Vr, Vtheta):
-        # Runge-Kutta Coefficients
-        K1 = Vtheta
-        M1 = get_Vr_double_prime(theta, Vr, Vtheta)
-        K2 = Vtheta + (1/2) * M1 * h
-        M2 = get_Vr_double_prime(theta + (h/2), Vr + K1 * (h/2), Vtheta + M1 * (h/2))
-        K3 = Vtheta + M2 * (h/2)
-        M3 = get_Vr_double_prime(theta + (h/2), Vr + K2 * (h/2), Vtheta + M2 * (h/2))
-        K4 = Vtheta + M3 * h
-        M4 = get_Vr_double_prime(theta + h, Vr + K3 * h, Vtheta + M3 * h)
+    # Runge-Kutta Coefficients
+    K1 = Vtheta
+    M1 = get_Vr_double_prime(theta, Vr, Vtheta)
+    K2 = Vtheta + (h/2) * M1
+    M2 = get_Vr_double_prime(theta + (h/2), Vr + K1*(h/2), Vtheta + M1*(h/2))
+    K3 = Vtheta + M2 * (h/2)
+    M3 = get_Vr_double_prime(theta + (h/2), Vr + K2*(h/2), Vtheta + M2*(h/2))
+    K4 = Vtheta + M3 * h
+    M4 = get_Vr_double_prime(theta + h, Vr + K3*h, Vtheta + M3*h)
 
-        # Update variables
-        Vtheta += h * (M1 + (2*M2) + (2*M3) + M4) / 6
-        Vr += h * (K1 + (2*K2) + (2*K3) + K4) / 6
+    # Update variables
+    Vtheta += (h/6) * (M1 + (2*M2) + (2*M3) + M4)
+    Vr += (h/6) * (K1 + (2*K2) + (2*K3) + K4)
 
-        return Vr, Vtheta
+    return Vr, Vtheta
 
+def TM_cone(theta_s, M0, gamma):
+    # Runge-Kutta solution to Taylor-Maccoll equation for flowfield between shock and cone surface
 
     if theta_s == 0: return 0 # Check if the shock wave is zero
     [M1, deflection, _, _, _, T1_T0] = oblique_shock(M0, theta_s, gamma, lookup_key="wave angle")
@@ -399,11 +399,11 @@ def integrate_TM(theta_s, M0, gamma):
 
     # Runge-Kutta Numerical Method
     h = -10**-5 # step size in theta (radians)
-    Vr, Vtheta = get_velocities(theta, Vr, Vtheta) # update velocities
+    Vr, Vtheta = get_TM_velocities(theta, Vr, Vtheta, h) # update velocities
 
     # Iterate until tangential velocity is zero
     while Vtheta < 0:
-        Vr_updated, Vtheta_updated = get_velocities(theta, Vr, Vtheta)
+        Vr_updated, Vtheta_updated = get_TM_velocities(theta, Vr, Vtheta, h)
 
         # Linear interpolation for precise zeroing of Vtheta
         if Vtheta_updated >= 0:
@@ -413,5 +413,19 @@ def integrate_TM(theta_s, M0, gamma):
         theta += h
         Vr, Vtheta = Vr_updated, Vtheta_updated
 
+    return theta
+
 def equilibrium_air(T):
     pass
+
+
+'''
+M = 10
+gamma = 1.2
+mu = numpy.rad2deg(numpy.asin(1 / M))
+betas = numpy.linspace(mu + 0.1, 75, 100)
+cone_angles = [TM_cone(beta, M, gamma) for beta in betas]
+
+plt.plot(betas, cone_angles)
+plt.show()
+'''

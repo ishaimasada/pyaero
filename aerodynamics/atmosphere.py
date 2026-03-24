@@ -1,4 +1,12 @@
 import math
+import os
+
+# Change the current working directory to the file location
+filepath = os.path.abspath(__file__)
+directory = os.path.dirname(filepath)
+os.chdir(directory)
+
+from compressible import isentropic
 
 # Only metric units
 def atmosphere(height, unit = "metric"):
@@ -29,10 +37,20 @@ class Ambient:
     R = 287
     gamma = 1.4
 
-    def __init__(self, Minf, altitude, alpha):
+    def __init__(self, altitude, alpha=None, Minf=None, Vinf=None):
         self.T, self.P, self.rho = atmosphere(altitude)
         self.rhoinf = self.P / (self.R * self.T)
-        self.Minf = Minf
         self.a = math.sqrt(self.gamma * self.R * self.T)
-        self.Vinf = self.Minf * self.a
-        self.alpha = alpha
+
+        # Allow either velocity or Mach number as input
+        if Minf != None:
+            self.Minf = Minf
+            self.Vinf = self.Minf * self.a
+        elif Vinf != None:
+            self.Vinf = Vinf
+            self.Minf = self.Vinf / self.a
+        
+        [_, Tt_T, Pt_P, rhot_rho, self.A_Astar] = isentropic(self.Minf, self.gamma, lookup_key="M")
+        self.Tt = Tt_T * self.T
+        self.Pt = Pt_P * self.P
+        self.rhot = rhot_rho * self.rho

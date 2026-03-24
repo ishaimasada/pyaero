@@ -1,10 +1,11 @@
 """
-Module for cycle Analysis and preliminary component design 
+Module for Cycle Analysis and preliminary component design 
 """
 
-import os
-import sys
+import pandas
 import numpy
+import sys
+import os
 
 # Change the current working directory to the file location
 filepath = os.path.abspath(__file__)
@@ -15,20 +16,17 @@ os.chdir(directory)
 sys.path.append(r'..\aerodynamics')
 
 from compressible import *
-from atmosphere import Ambient
+from atmosphere import *
+from curves import *
 
 
 class Station:
     """ Correlations for combustion products from Walsh and Fletcher """
-    A = {
-         "A0" : 992.313, "A1" : 236.688, "A2" : -1852.148, "A3" : 6083.152, "A4" : -8893.933, "A5" : 7097.112, 
-         "A6" : -3234.725, "A7" : 794.571, "A8" : -81.873, "A9" : 422.178, "A10" : 1.053
-        }
+    A = {"A0" : 992.313, "A1" : 236.688, "A2" : -1852.148, "A3" : 6083.152, "A4" : -8893.933, "A5" : 7097.112, 
+         "A6" : -3234.725, "A7" : 794.571, "A8" : -81.873, "A9" : 422.178, "A10" : 1.053}
 
-    B = {
-         "B0" : -718.874, "B1": 8747.481, "B2": -15863.157, "B3": 17254.096, "B4": -10233.795, "B5": 3081.778, 
-         "B6": -361.112, "B7": -3.919, "B8": 55.593, "B9": 1.6079
-        }
+    B = {"B0" : -718.874, "B1": 8747.481, "B2": -15863.157, "B3": 17254.096, "B4": -10233.795, "B5": 3081.778, 
+         "B6": -361.112, "B7": -3.919, "B8": 55.593, "B9": 1.6079}
 
     C = {"C0": 1.0001, "C1": 0.9248, "C2": -2.2078}
     
@@ -36,49 +34,73 @@ class Station:
     Tref = 288.15
     Pref = 101325
 
-    def __init__(self, W, Tt, Pt, name:dict=None):
+    column_names = [
+                    "W [kg/sec]", 
+                    "Wc [kg/sec]", 
+                    "Tt [K]",
+                    "Pt [Pa]",
+                    "ht [kJ/kg]",
+                    "M",
+                    "Ts [K]",
+                    "hs [kJ/kg]",
+                    "Ps [Pa]",
+                    "V [m/sec]",
+                    "rho [kg/m^3]",
+                    "Area [m^2]"
+                   ]
+
+    def __init__(self, W, Tt, Pt, M=None, idx=None):
         self.W = W
         self.Tt = Tt
         self.Pt = Pt
-        self.name = name
-        self.Wc = self.W * numpy.sqrt(self.Tt / self.Tref) / (self.Pt / self.Tref)
+        self.Wc = self.get_Wc(self.W, self.Tt, self.Pt)
+        self.FAR = self.Wf = 0
+        self.ht = self.get_ht(self.Tt, self.FAR)
+        self.M = M
+        self.idx = idx
 
-        # Statics
-        self.M = self.T = self.P = self.V = self.rho = self.area = 0
-
-        # Gas Model
-        self.FAR = 0
+        if self.M != None: self.set_statics(self.M)
 
     def __str__(self):
-        return f"Station {self.name}\nW = {self.W}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt}"
+        return f"Station {self.idx}\nW = {self.W}\nWc = {self.Wc}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt}"
+
+    @property
+    def Wc(self): return self.get_Wc(self.W, self.Tt, self.Pt)
+
+    @Wc.setter
+    def Wc(self, value): self._Wc = value
+
+    def get_Wc(self, W, T, P): return W * numpy.sqrt(T / self.Tref) / (P / self.Pref)
 
     @property
     def R(self): return self.get_R(self.FAR)
 
-    @property
-    def cp(self): return self.get_cp(self.Tt, self.FAR)
+    @R.setter
+    def R(self, value): self._R = value
+
+    def get_R(self, FAR): return 287.05 - 0.0099 * FAR + 0.0000001 * FAR**2 # Formula 3.22 for Kerosene
 
     @property
     def gamma(self): return self.get_gamma()
 
-    @property
-    def ht(self): return self.get_ht(self.Tt, self.FAR)
-
-    @R.setter
-    def R(self, value): self._R = value
-
     @gamma.setter
     def gamma(self, value): self._gamma = value
 
-    @ht.setter
-    def ht(self, value): self._ht = value
+    def get_gamma(self): return self.cp / (self.cp - self.R)
+
+    @property
+    def FAR(self): return self.get_FAR()
+
+    @FAR.setter
+    def FAR(self, value): self._FAR = value
+
+    def get_FAR(self): return self.Wf / (self.W - self.Wf)
+
+    @property
+    def cp(self): return self.get_cp(self.Tt, self.FAR)
 
     @cp.setter
     def cp(self, value): self._cp = value
-
-    def get_R(self, FAR): return 287.05 - 0.0099 * FAR + 0.0000001 * FAR**2 # Formula 3.22 for Kerosene
-
-    def get_gamma(self): return self.cp / (self.cp - self.R)
 
     def get_cp(self, T, FAR):
         TZ = T/1000
@@ -91,16 +113,11 @@ class Station:
                 ) # Formula 3.24
         return cp
 
-        
-    def set_statics(self, M):
-        [_, Tt_T, Pt_P, _, _] = isentropic(M, lookup_key="M")
-        self.M = M
-        self.T = (1 / Tt_T) * self.Tt
-        self.P = (1 / Pt_P) * self.Pt
-        self.V = self.M * numpy.sqrt(self.gamma * self.R * self.T)
-        self.rho = self.P / (self.R * self.T)
-        self.area = self.W / (self.rho * self.V)
+    @property
+    def ht(self): return self.get_ht(self.Tt, self.FAR)
 
+    @ht.setter
+    def ht(self, value): self._ht = value
 
     def get_ht(self, T, FAR):
         """ Formula 3.27 """
@@ -115,9 +132,24 @@ class Station:
             ) - self.REFH0
         return ht
 
+        
+    def set_statics(self, M):
+        [_, Tt_T, Pt_P, _, _] = isentropic(M, self.gamma, lookup_key="M")
+        self.M = M
+        self.T = (1 / Tt_T) * self.Tt
+        self.h = self.T * self.cp
+        self.P = (1 / Pt_P) * self.Pt
+        self.V = self.M * numpy.sqrt(self.gamma * self.R * self.T)
+        self.rho = self.P / (self.R * self.T)
+        self.area = self.W / (self.rho * self.V)
+
 
     def T_from_H(self, h, FAR, Thi, Tlo):
         """ Finding temperature from enthalpy polynomial using the Bisection Method """
+        h_lo = self.get_ht(Tlo, FAR)
+        h_hi = self.get_ht(Thi, FAR)
+        if not (h_lo <= h <= h_hi or h_hi <= h <= h_lo): raise ValueError("Bisection bounds do not bracket the solution")
+
         # Initial calculation of hmid to prevent uninitialized use
         Tmid = (Thi + Tlo) / 2
         hmid = self.get_ht(Tmid, FAR)
@@ -135,71 +167,163 @@ class Station:
             iterations += 1
             T = Tmid
             error = abs(hmid - h) / h
-
         return T
+
+    def get_station_data(self):
+        if self.M != None: station_data = [self.W, self.Wc, self.Tt, self.Pt, self.ht, self.M, self.T, self.h, self.P, self.V, self.rho, self.area]
+        else: station_data = [self.W, self.Wc, self.Tt, self.Pt, self.ht, None, None, None, None, None, None, None]
+
+        return station_data
 
 
 class Inlet:
-    def __init__(self, upstream:Station, Pt_recovery):
-        self.upstream = upstream
+    def __init__(self, freestream:Ambient, cycle_parameters, component_parameters=None):
+        # CYCLE ANALYSIS
+        D1 = cycle_parameters["front face diameter"]
+        M1 = cycle_parameters["M1"]
+        [_, _, _, rhot_rho, _] = isentropic(freestream.Minf, freestream.gamma, lookup_key="M")
+        A1 = numpy.pi * (D1 / 2)**2
+        rho1 = freestream.rhot * (1/rhot_rho)
+        W1 = freestream.Vinf * rho1 * A1
+        self.upstream = Station(W1, freestream.Tt, freestream.Pt, idx=1) # Station 1
+        self.upstream.set_statics(M1)
+        self.freestream = Station(W1, freestream.Tt, freestream.Pt, idx=0) # Station 0
+        self.freestream.set_statics(freestream.Minf)
+        
         self.exit_W = self.upstream.W
-        self.exit_Pt = self.upstream.Pt * Pt_recovery
+        self.exit_Pt = self.upstream.Pt
         self.exit_Tt = self.upstream.Tt
-        self.downstream = Station(self.exit_W, self.exit_Tt, self.exit_Pt)
+        self.downstream = Station(self.exit_W, self.exit_Tt, self.exit_Pt, 2) # Must be split into tip and root if going into a fan
+
+        # COMPONENT ANALYSIS
+        if component_parameters != None: pass
+
 
 class Compressor:
-    def __init__(self, upstream:Station, PR):
+    def __init__(self, upstream:Station, cycle_parameters):
+        # CYCLE ANALYSIS
+        PR = cycle_parameters["PR"]
+        hp_bleed = cycle_parameters["bleed"]
+        e_t = cycle_parameters["efficiency"]
+
         self.upstream = upstream
-        self.exit_W = self.upstream.W
+        self.coolant = hp_bleed.cooling * self.upstream.W
+        self.exit_W = self.upstream.W - self.coolant
         self.exit_Pt = self.upstream.Pt * PR
-        self.exit_Tt = self.upstream.Tt
-        self.downstream = Station(self.exit_W, self.exit_Tt, self.exit_Pt)
+        self.exit_Tt = self.upstream.Tt * (PR)**((self.upstream.gamma - 1)*e_t / self.upstream.gamma)
+        self.downstream = Station(self.upstream.W, self.exit_Tt, self.exit_Pt)
+        self.delta_h =  self.upstream.cp * self.upstream.Tt - (self.downstream.cp * self.downstream.Tt)
+        self.power = self.upstream.W * self.delta_h
+
 
 class Burner:
-    def __init__(self, upstream:Station, TET, LHV, pressure_loss):
+    def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
+        # CYCLE ANALYSIS
+        Ptloss_b = cycle_parameters["burner total pressure loss"]
+        TET = cycle_parameters["TET"]
+        LHV = cycle_parameters["LHV"]
+        self.eta_b = cycle_parameters["burner efficiency"]
+
         self.upstream = upstream
-        self.eta_b = 1
-        self.exit_FAR = self.upstream.get_FAR(TET, self.inlet.Tt, LHV)
+        self.exit_FAR = self.burn(TET, self.upstream.Tt, LHV)
         self.exit_W = self.upstream.W * (1 + self.exit_FAR)
-        self.exit_Pt = upstream.Pt * (1 - pressure_loss)
+        self.exit_Pt = upstream.Pt * (1 - Ptloss_b)
         self.exit_Tt = TET
         self.downstream = Station(self.exit_W, self.exit_Tt, self.exit_Pt)
-    
+
+        # COMPONENT DESIGN
+        if component_parameters != None: pass
+
+    def burn(self, T2, T1, LHV):
+        FARnew = 0.02
+        FAR = -1 
+        h1 = self.upstream.get_ht(T1, 0)
+        tolerance = 0.00001
+        error = (abs(FAR - FARnew) / FARnew) 
+        
+        while error > tolerance:
+            FAR = FARnew
+            h2 = self.upstream.get_ht(T2, FAR)
+            FARnew = (h2 - h1) / (LHV * self.eta_b)
+            error = (abs(FAR - FARnew) / FARnew) 
+
+        return FARnew
+        
 
 class Turbine:
-    def __init__(self, cycle_parameters, cycle_specification=None):
+    def __init__(self, upstream, cycle_parameters, component_parameters=None):
         # CYCLE ANALYSIS
-        self.upstream = cycle_parameters["upstream"] # Station object
         TET = cycle_parameters["TET"]
-        e_tt = cycle_parameters["polytropic efficiency"]
-        mdot_cool = cycle_parameters["coolant"]
-        power = cycle_parameters["turbine power consumption"] * 1000 # MW to kW
+        e_t = cycle_parameters["polytropic efficiency"]
+        mdot_cool = cycle_parameters["compressor"].coolant
+        power = cycle_parameters["compressor"].power 
 
+        self.upstream = upstream
         self.exit_W = self.upstream.W + mdot_cool
         self.exit_ht = (self.upstream.ht * self.upstream.W - power) / self.upstream.W
         FAR = self.upstream.W * self.upstream.FAR / (self.exit_W - (self.upstream.W * self.upstream.FAR))
-        self.exit_Tt = self.upstream.T_from_H(self.exit_ht, FAR, TET, 0)
-        ER = (self.exit_Tt  / self.upstream.Tt)**(-self.upstream.gamma / ((self.upstream.gamma - 1)*e_tt))
+        self.exit_Tt = self.upstream.T_from_H(self.exit_ht/1000, FAR, TET, 0)
+        ER = (self.exit_Tt  / self.upstream.Tt)**(-self.upstream.gamma / ((self.upstream.gamma - 1)*e_t))
         self.exit_Pt = self.upstream.Pt / ER
         self.downstream = Station(self.exit_W, self.exit_Tt, self.exit_Pt)
 
         # COMPONENT DESIGN
-        if cycle_specification != None:
-            self.phi = cycle_specification["load coefficient"]
-            self.psi = cycle_specification["work coefficient"]
+        if component_parameters != None:
+            self.phi = component_parameters["load coefficient"]
+            self.psi = component_parameters["work coefficient"]
+            self.R = component_parameters["radius"]
+            self.rpm = component_parameters["rpm"]
+            self.Vum3 = component_parameters["tangential velocity at mid radius station 3"]
+            self.Rm3 = component_parameters["mid radius at station 3"]
+            self.AR = component_parameters[" aspect ratio"]
+    
+            omega = self.rpm * (2*numpy.pi / 60)
+            self.Vax3 = component_parameters["axial velocity"]
 
-    def velocity_triangle(self, R: list, rpm, Vax, Vu_mid, Rmid):
-        omega = rpm * (2*numpy.pi / 60)
+    def solve_stage(self, R: list, omega, Vax, Vu_mid, Rm3):
+        # Aerodynamics
         U = omega * numpy.array(R)
-        Vu = Vu_mid * (R / Rmid) # Free vortex assumption
+        Vu = Vu_mid * (R / Rm3) # Free vortex assumption
         Wu = Vu - U
         V = numpy.sqrt(Vax**2 + Vu**2)
         W = numpy.sqrt(Vax**2 + Wu**2)
         alpha = numpy.atan(Vu / Vax)
         beta = numpy.atan(Wu / Vax)
         reaction = (W[2]**2 - W[1]**2) / (V[2]**2 - V[1]**2 + W[2]**2 - W[1]**2)
-        #M_absolute = V / numpy.sqrt(self.downstream.gamma * self.downstream.R * self.downstream.T)
-        #statics = isentropic()
+
+        # Thermodynamic Properties
+        delta_ht = self.psi * U[2]**2
+        Tt1 = Tt2 = self.upstream.Tt
+        Tt3 = self.upstream.T_from_H(ht[2], self.upstream.FAR, self.upstream.Tt, 100)
+        ER = (self.exit_Tt  / self.upstream.Tt)**(-self.upstream.gamma / ((self.upstream.gamma - 1)*e_tt))
+        Pt1 = Pt2 = self.upstream.Pt
+        Pt3 = Pt2 / ER
+        mdot = numpy.array([self.upstream.W, self.upstream.W, self.upstream.W + self.mdot_cool])
+        Tt = numpy.array([Tt1, Tt2, Tt3])
+        Pt = numpy.array([Pt1, Pt2, Pt3])
+        mdot_corrected = numpy.vectorize(self.upstream.get_Wc)(mdot, Tt, Pt)
+        ht = numpy.array([self.upstream.ht, self.upstream.ht, self.upstream.ht - delta_ht])
+        T = ht - V**2 / self.upstream.cp
+        P = Pt * (T / Tt)**(self.upstream.gamma / ((self.upstream.gamma - 1)*self.e_tt))
+        rho = P / (self.upstream.R * T)
+        a = numpy.sqrt(self.upstream.R * self.upstream.gamma * T)
+        M_absolute = V / a
+        M_relative = W / a
+
+    def blade_geometry(self):
+        pass
+        '''
+        sections = solve_section()
+        # Geometry
+        hub = sections[0]
+        tip = sections[-1]
+        h = (sections.R[-1][1] + Rt[0])/2 - (Rh[2] + Rh[1])/2
+        c = h / AR
+        stagger_angle = (alpha + alpha) / 2
+        cax_t = c * numpy.cos(stagger_angle)
+        cax_t = c * numpy.cos(stagger_angle)
+        taper_ratio = 
+        '''
 
 
 class Nozzle:
@@ -232,77 +356,114 @@ class Diffuser:
             pass
 
 class Bleed:
-    def init(self):
-        pass
+    def __init__(self, cooling, packing):
+        self.cooling = cooling
+        self.packing = packing
+
 class Duct:
     def init(self):
         pass
 
 class Engine:
-    def __init__(self):
-        # Design Parameters (Defaults are in metric units)
-        self.OPR = 20
-        self.TET = 1600
-        self.BPR = 4
-        self.FPR = 2.1
-        self.LHV = 43.15*10**6
-        self.CPR = self.OPR / self.FPR
-        self.Minf = 0.85
-        self.altitude = 13106.4
+    def __init__(self, engine_parameters):
+        # Design Parameters (metric units)
+        self.OPR = engine_parameters["OPR"]
+        self.TET = engine_parameters["TET"]
+        self.BPR = engine_parameters["BPR"]
+        self.FPR = engine_parameters["FPR"]
+        self.LHV = engine_parameters["LHV"]
+        self.Minf = engine_parameters["Minf"]
+        self.altitude = engine_parameters["altitude"]
+        self.front_diameter = engine_parameters["front face diameter"] # inches
 
-        # Other Parameters
-        self.ambient = Ambient(self.Minf, self.altitude, self.alpha)
-        self.front_diameter = 42 # inches
-        self.FAR = 0
-        self.alpha = 0
+        # Component Efficiencies
+        self.Ptrec_ft = engine_parameters["fan tip total pressure recovery"] 
+        self.Ptrec_fh = engine_parameters["fan hub total pressure recovery"]
+        self.Ptloss_OGV = engine_parameters["OGV total pressure loss"]
+        self.Ptloss_bypass = engine_parameters["bypass duct total pressure loss"]
+        self.e_ft = engine_parameters["fan tip polytropic efficiency"]
+        self.e_fh = engine_parameters["fan hub polytropic efficiency"]
+        self.swan_loss = engine_parameters["swan neck loss"]
+        self.e_core = engine_parameters["core comp. polytropic efficiency"]
+        self.eta_b = engine_parameters["burner efficiency"]
+        self.Ptloss_b = engine_parameters["burner total pressure loss"]
+        self.e_t = engine_parameters["turbine polytropic efficiency"]
+        self.CD = engine_parameters["Nozzle Discharge Coefficienct"]
+        self.CV =engine_parameters["Nozzle Velocity Coefficienct"]
+        self.eta_m = engine_parameters["shaft mechanical efficiency"]
 
-        # Component Efficiency Assumptions
-        self.inlet_Pt_recovery_tip = 0.98
-        self.inlet_Pt_recovery_hub = 0.97
-        self.OGV_Pt_loss = 0.03
-        self.bypass_duct_Pt_loss = 0.01
-        self.e_tt_fan_tip = 0.9
-        self.e_tt_fan_hub = 0.9
-        self.swan_neck_loss = 0.02
-        self.e_tt_core_comp = 0.91
-        self.eta_b = 0.99
-        self.burner_Pt_loss = 0.05
-        self.e_tt_turbine = 0.8
-        self.CD = 0.97
-        self.CV = 0.99
-        self.e_mechanical = 0.99
+        # Secondary Air System
+        self.hp_bleed = Bleed(engine_parameters["high pressure cooling"], engine_parameters["high pressure packing"])
+        self.lp_bleed = Bleed(engine_parameters["low pressure cooling"], engine_parameters["low pressure packing"])
+
+        # Mach Numbers
+        self.M1 =engine_parameters["M1"]
+        self.M12 = engine_parameters["M1.2"]
+        self.M2 = engine_parameters["M2"]
+        self.M31 = engine_parameters["M3.1"]
+        self.M5 = engine_parameters["M5"]
 
         # Prepare cycle analysis and component design inputs
+        intake_cycle_parameters = {"front face diameter": self.front_diameter, "M1": self.M1}
+        burner_cycle_parameters = {"TET": self.TET, "LHV": self.LHV, "burner total pressure loss": self.Ptloss_b, "burner efficiency": self.eta_b}
+        compressor_cycle_parameters = {"PR": self.OPR, "bleed": self.hp_bleed, "efficiency": self.e_core}
 
         # Architecture
-        ambient = Station()
-        self.inlet = Inlet(upstream = ambient)
-        self.compressor = Compressor(upstream = self.inlet.downstream)
-        self.burner = Burner(upstream = self.compressor.downstream)
-        self.turbine =  Turbine(upstream = self.burner.downstream)
-        self.exhaust =  Nozzle(upstream = self.turbine.downstream)
+        self.ambient = Ambient(self.altitude, Minf=self.Minf)
+        self.inlet = Inlet(self.ambient, intake_cycle_parameters)
+        self.compressor = Compressor(self.inlet.downstream, compressor_cycle_parameters)
+        self.burner = Burner(self.compressor.downstream, burner_cycle_parameters)
 
+        turbine_cycle_parameters = {"TET": self.TET, "polytropic efficiency": self.e_t, "compressor": self.compressor}
 
+        self.turbine =  Turbine(self.burner.downstream, turbine_cycle_parameters)
+        self.exhaust =  Nozzle(self.turbine.downstream)
+        
+        self.components = [self.inlet, self.compressor, self.burner, self.turbine, self.exhaust]
 
-    """ Performance Parameters """
     '''
-    # Specific Thrust
-    T_ma = u_e * (1 + f44) - u_i
-    # Thrust Specific Fuel Consumption (TSFC)
-    TSFC = (f44 / T_ma) * 10**3
-    # Thrust
-    thrust = T_ma * mdota
+    @property
+    def components(self): return self.validate_cycle(engine_parameters)
 
-    # Propulsive Efficiency
-    eta_p = 2 / (1 + (u_e / u_i))
-    # Thermal Efficiency
-    eta_th = (((1 + f44) * u_e ** 2) - u_i**2) / (f44 * QR)
-    # Overall Efficiency
-    eta_o = eta_p * eta_th
+    @components.setter
+    def components(self, components): self._components = components
+
+    def validate_cycle(self, engine_parameters): return self.cp / (self.cp - self.R)
+    self.components = [self.ambient, self.inlet, self.compressor, self.burner, self.turbine, self.exhaust]
     '''
 
-    def validate_cycle(self):
+
+    def get_station_data(self): 
+        raw_data = list()
+
+        for component in self.components:
+            if isinstance(component, Inlet): raw_data.append(component.upstream.get_station_data())
+            else: raw_data.append(component.downstream.get_station_data())
+
+        station_data = pandas.DataFrame(raw_data, columns=Station.column_names)
+
+        return station_data
+
+
+    def display_performance(self):
+        """ Performance Parameters """
+        '''
+        # Specific Thrust
+        T_ma = u_e * (1 + f44) - u_i
+        # Thrust Specific Fuel Consumption (TSFC)
+        TSFC = (f44 / T_ma) * 10**3
+        # Thrust
+        thrust = T_ma * mdota
+
+        # Propulsive Efficiency
+        eta_p = 2 / (1 + (u_e / u_i))
+        # Thermal Efficiency
+        eta_th = (((1 + f44) * u_e ** 2) - u_i**2) / (f44 * QR)
+        # Overall Efficiency
+        eta_o = eta_p * eta_th
+        '''
         pass
+
     def optimize(self, performance_parameter):
         pass
     def sensitivity_study(self):

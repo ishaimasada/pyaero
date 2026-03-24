@@ -42,14 +42,12 @@ def write_coords(filename, coordinates):
 
 def load_data(span, data):
     # All points within airfoil section
-    #section_points = [(float(point.strip().split()[0]), float(point.strip().split()[1]), float(point.strip().split()[2])) for point in raw_data[span].splitlines()]
     section_points = [(float(point.strip().split()[1]), float(point.strip().split()[2])) for point in data[span].splitlines()]
 
     # Span Position
     span_x = int(float(data[span].splitlines()[0].split()[0]))
 
     # Suction Side Points
-    #suction_side_points = [(float(point.strip().split()[0]), float(point.strip().split()[1]), float(point.strip().split()[2])) for point in raw_data[span].split('TE')[0].splitlines()]
     pressure_side_points = [(float(point.strip().split()[1]), float(point.strip().split()[2])) for point in data[span].split('TE')[0].splitlines()]
 
     # Pressure Side Points
