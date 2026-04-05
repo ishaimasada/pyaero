@@ -1,7 +1,6 @@
 import numpy
 import os
 import cantera
-
 import matplotlib.pyplot as plt
 
 # Change the current working directory to the file location
@@ -9,44 +8,40 @@ filepath = os.path.abspath(__file__)
 directory = os.path.dirname(filepath)
 os.chdir(directory)
 
-# General iteration function
+
+# Brute force iteration function
 def iterate(function_name, LHS, guess=None):
     error_threshold = 10**-4
-    if guess == None:
-        guess = error_threshold
+    if guess == None: guess = error_threshold
     RHS = function_name(guess)
-    error = abs(LHS - RHS) / LHS
-    while error > error_threshold:
-        guess += error_threshold/2
+    error = (LHS - RHS) / LHS
+    while abs(error) > error_threshold:
+        if error > 0: guess += error_threshold/2
+        elif error < 0: guess -= error_threshold/2
         RHS = function_name(guess)
-        error = abs(LHS - RHS) / LHS
+        error = (LHS - RHS) / LHS
     return guess
 
 
-def bisection(function_name, guess_max, guess_min):
+def bisection(function_name, LHS, guess_high, guess_low):
     error_threshold = 10**-4
-    max_iter = 100
-    fmax, fmin = function_name(guess_max), function_name(guess_min)
-    if fmax * fmin > 0: raise ValueError("f(a) and f(b) must have opposite signs.")
+    guess_mid = (guess_high + guess_low) / 2
+    fmid = function_name(guess_mid)
+    error = (LHS - fmid) / LHS
 
-    for _ in range(max_iter):
-        guess_mid = 0.5 * (guess_max + guess_min)
+    while abs(error) > error_threshold:
+        if fmid < LHS: guess_low = guess_mid
+        elif fmid > LHS: guess_high = guess_mid
+
+        guess_mid = (guess_high + guess_low) / 2
         fmid = function_name(guess_mid)
-
-        # Check convergence
-        if abs(fmid) < error_threshold or 0.5 * (guess_min - guess_max) < error_threshold: return guess_mid
-
-        # Narrow the interval
-        if fmax * fmid < 0: b, fb = guess_mid, fmid
-        else: a, fmax = guess_mid, fmid
-
-    # If max iterations reached, return midpoint
-    return 0.5 * (guess_max + guess_min)
-
+        error = (LHS - fmid) / LHS
+    return guess_mid
 
 # A.1
 def isentropic(parameter, gamma, lookup_key="M"):
     def get_A_Astar(M):
+        if M == 0: return numpy.inf #print("Mach of zero causes singularity. Returning infinity")
         Tt_T = 1 + ((gamma - 1)/2) * M**2
         A_Astar = ((gamma + 1) / 2)**((-gamma - 1) / (2 * (gamma - 1))) * (Tt_T**((gamma + 1) / (2 * (gamma - 1)))) / M
         return A_Astar
@@ -415,11 +410,167 @@ def TM_cone(theta_s, M0, gamma):
 
     return theta
 
+def busemann_inlet(M3, altitude, theta_s, throat_radius):
+    # Busemann Inlet Design
+
+    min_theta_s = numpy.deg2rad(12)
+    gamma = 1.4
+    R = 287
+    tolerance = 10^-3
+    h = 10^-4
+    max_iterations = 10^5
+    max_theta_s = numpy.asin(1 / M3)
+    max_theta = numpy.pi
+    Cp = gamma * R / (gamma - 1)
+
+    '''
+    %% CHECK CONE HALF ANGLE BOUNDS
+
+    % Maximum
+    if theta_s > max_theta_s
+        fprintf("Shock angle exceeds the maximum --> decrease the shock half angle.\n")
+        return
+    end
+
+    % Minimum
+    if theta_s < min_theta_s
+        fprintf("Shock angle is below the minimum --> increase the shock half angle.\n")
+        return
+    end
+
+
+    %% DELTA ITERATION
+
+    % Upstream Mach number and Deflection Angle
+    Mn3 = M3 * sin(theta_s);
+    Mn2 = sqrt((2 + Mn3^2 * (gamma - 1)) / (2 * Mn3^2 * gamma - (gamma - 1)));
+
+    % Guess delta
+    delta_guess = tolerance; % Guess deflection in radians
+    beta = delta_guess + theta_s; % Wave angle in radians
+    M2 = Mn2 / sin(beta);
+
+    % Solve for new delta
+    delta = atan((2 * cot(beta) * (M2^2 * sin(beta)^2 - 1) / (M2^2 * (gamma + cos(2*beta)) + 2))); % Deflection angle in radians
+    error = abs(delta - delta_guess);
+    iterations = 0;
+
+    % Iterate delta (flow deflection) until it converges
+    while error > tolerance && iterations < max_iterations
+        iterations = iterations + 1;
+        
+        % Add or subtract the step size based on sign of error
+        if delta_guess < delta
+            delta_guess = delta_guess + h;
+        elseif delta_guess > delta
+            delta_guess = delta_guess - h;
+        end
+
+        % Update variables
+        beta = delta_guess + theta_s;
+        M2 = Mn2 / sin(beta);
+        delta = atan((2 * cot(beta) * (M2^2 * sin(beta)^2 - 1) / (M2^2 * (gamma + cos(2*beta)) + 2))); % Deflection angle in radians
+        error = abs(delta - delta_guess);
+    end
+
+
+    %% TAYLOR-MACCOLL INTEGRATION
+
+    % Initial Conditions (pre-shock state --> "station" 2)
+    V2 = sqrt(M2^2 / (2/(gamma-1) + M2^2)); % Non-dimensionalized velocity using Equation 10.16 from [1]
+    Vr = V2 * cos(beta);
+    Vtheta = - V2 * sin(beta);
+    r = throat_radius / sin(theta_s);
+    theta = theta_s;
+    contour_x = [r * cos(theta)];
+    contour_y = [r * sin(theta)];
+    Vy = Vr*sin(theta) + Vtheta*cos(theta); % Cartesian y-velocity
+
+    % March theta positively (CCW/upstream) until Vy is zero (force maximum
+    % theta of 180deg)
+    while abs(Vy) > tolerance && theta < max_theta
+
+        % Solve Taylor-Maccoll for the velocity components
+        [Vr_updated, Vtheta_updated] = get_TM_velocity(theta, Vr, Vtheta, gamma, h);
+
+        % Handle the zero crossing with linear interpolation
+        if Vtheta * Vtheta_updated < 0
+            fraction = -Vtheta / (Vtheta_updated - Vtheta);
+            theta_zero = theta + fraction * h;
+            r_zero = r + fraction * (h * r * (Vr / Vtheta));
+        
+            % interpolate velocities
+            Vr = Vr + fraction * (Vr_updated - Vr);
+            Vtheta = Vtheta + fraction * (Vtheta_updated - Vtheta);
+            contour_x(end+1) = r_zero * cos(theta_zero);
+            contour_y(end+1) = r_zero * sin(theta_zero);
+            break
+        end
+
+        % Update variables
+        theta = theta + h;
+        dr = h * r * (Vr / Vtheta);
+        r = r + dr;
+        Vr = Vr_updated;
+        Vtheta = Vtheta_updated;
+
+        % Convert to Cartesian and store contour coordinates
+        contour_x(end+1) = r * cos(theta);
+        contour_y(end+1) = r * sin(theta);
+        Vy = Vr*sin(theta) + Vtheta*cos(theta);
+    end
+
+
+    %% REPORT RESULTS
+
+    % Atmospheric Properties
+    [~, Patm, Tatm] = standard_atm(altitude);
+
+    % Area Contraction Ratio
+    CR = (contour_y(end))^2 / throat_radius^2;
+
+    % Freestream Mach number
+    V1 = sqrt(Vr^2 + Vtheta^2);
+    M1 = sqrt((2 * V1^2) /((gamma-1) * (1 - V1^2))); % Rearanging Eq 10.16 with Vmax=1 & V=V1
+
+    % Inlet Loss
+    Pt3_Pt1 = (((gamma + 1)*Mn2^2) / ((gamma - 1)*Mn2^2 + 2))^(gamma / (gamma - 1)) * ((gamma + 1) / ((2 * gamma * Mn2^2) - (gamma - 2)))^(1 / (gamma - 1));
+
+    % Static Pressure Ratio
+    P3_P2 = ((2 * gamma * Mn2^2) - (gamma - 1)) / (gamma + 1);
+    Pt2_P2 = (1 + (gamma -1)/2 * M2^2)^(gamma / (gamma - 1));
+    Pt1_P1 = (1 + (gamma -1)/2 * M1^2)^(gamma / (gamma - 1));
+    P3_P1 = P3_P2 * (1/Pt2_P2) * Pt1_P1;
+
+    % Static Temperature Ratio
+    T3_T2 = (((2 * gamma * Mn2^2) - (gamma - 1)) * ((gamma - 1)*Mn2^2 + 2)) / ((gamma + 1)^2 * Mn2^2);
+    Tt2_T2 = 1 + (gamma - 1)/2 * M2^2;
+    Tt1_T1 = (1 + (gamma - 1)/2 * M1^2);
+    T3_T1 = T3_T2 * (1/Tt2_T2) * Tt1_T1;
+
+
+    %% CONTOUR
+
+    figure;
+    plot(contour_x, contour_y, 'b-', 'LineWidth', 2.5); 
+    hold on;
+    plot(contour_x, -contour_y, 'b-', 'LineWidth', 2.5);
+    axis equal;
+    xlabel('Axial coordinate (normalized)');
+    ylabel('Radial coordinate (normalized)');
+    title('Busemann Inlet Wall Contour');
+    '''
+
+
 def equilibrium_air(T):
     pass
 
 
 '''
+M3 = 2.27
+altitude = 10000
+theta_s = numpy.deg2rad(17.2)
+throat_radius = 1
 M = 10
 gamma = 1.2
 mu = numpy.rad2deg(numpy.asin(1 / M))

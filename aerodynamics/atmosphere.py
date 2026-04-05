@@ -10,7 +10,7 @@ from compressible import isentropic
 
 # Only metric units
 def atmosphere(height, unit = "metric"):
-    #if unit == "imperial": height = height * 0.3048
+    if unit == "imperial": height = height * 0.3048
 
     # assuming height is in m
     troposphere = 11000 # m
@@ -49,6 +49,7 @@ class Ambient:
         elif Vinf != None:
             self.Vinf = Vinf
             self.Minf = self.Vinf / self.a
+        else: self.Minf = self.Vinf = 0
         
         [_, Tt_T, Pt_P, rhot_rho, self.A_Astar] = isentropic(self.Minf, self.gamma, lookup_key="M")
         self.Tt = Tt_T * self.T
