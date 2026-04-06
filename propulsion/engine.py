@@ -4,6 +4,7 @@ Module for Cycle Analysis and preliminary component design
 
 import pandas
 import numpy
+import copy
 import sys
 import os
 
@@ -52,19 +53,20 @@ class Station:
                     "Area [m^2]"
                    ]
 
-    def __init__(self, W, Wf, Tt, Pt, FAR, M=None, idx=None):
+    def __init__(self, W, Wf, Tt, Pt, FAR=None, M=None, idx=None):
         self.W = W
         self.Tt = Tt
         self.Pt = Pt
         self.Wc = self.get_Wc(self.W, self.Tt, self.Pt)
-        self.FAR = 0
         self.Wf = 0
         self.Wa = self.W - self.Wf
+        self.FAR = FAR
         self.ht = self.get_ht(self.Tt, self.FAR)
         self.M = M
         self.idx = idx
 
         if self.M != None: self.set_statics(self.M)
+        if self.FAR != None: self.FAR = self.get_FAR()
 
     def __str__(self):
         return f"Station {self.idx}\nW = {self.W}\nWc = {self.Wc}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt}\M = {self.M}"
@@ -197,7 +199,7 @@ class Inlet:
 
         self.freestream = Station(W1, freestream_Wf, freestream.Tt, freestream.Pt, freestream_FAR, M=freestream.Minf, idx=0) # Station 0
         self.inlet = Station(W1, inlet_Wf, freestream.Tt, freestream.Pt, inlet_FAR, M=M_inlet, idx=1) # Station 1
-        self.exit = self.inlet
+        self.exit = copy.deepcopy(self.inlet)
         self.exit.M = M_exit
         self.exit.Pt = self.inlet.Pt * Pt_recovery
 
@@ -217,7 +219,7 @@ class Compressor:
         bleed = engine.bleed
 
         self.inlet = upstream
-        self.exit = self.inlet
+        self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = exit_idx
         self.exit.M = M_exit
         self.inlet.idx = inlet_idx
@@ -241,10 +243,10 @@ class Burner:
         TET = engine.TET
 
         self.inlet = upstream
-        self.exit = self.inlet
+        self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = exit_idx
         self.exit.M = M_exit
-        FAR = self.get_FAR(TET, self.inlet.Tt, LHV, eta_b)
+        FAR = self.get_FAR(TET, self.inlet.Tt, 0, LHV, eta_b)
         self.exit.Wf = self.inlet.W * FAR
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
         self.exit.Pt = self.inlet.Pt * (1 - Ptloss_b)
@@ -253,16 +255,16 @@ class Burner:
         # COMPONENT DESIGN
         if component_parameters != None: pass
 
-    def get_FAR(self, T2, T1, LHV, eta):
+    def get_FAR(self, T2, T1, FAR1, LHV, eta):
         FARnew = 0.02
         FAR = -1 
-        h1 = self.inlet.get_ht(T1, 0)
+        h1 = self.inlet.get_ht(T1, FAR1)
         tolerance = 0.00001
         error = (abs(FAR - FARnew) / FARnew) 
         
         while error > tolerance:
             FAR = FARnew
-            h2 = self.inlet.get_ht(T2, FAR)
+            h2 = self.exit.get_ht(T2, FAR)
             FARnew = (h2 - h1) / (LHV * eta)
             error = (abs(FAR - FARnew) / FARnew) 
 
@@ -280,7 +282,7 @@ class Turbine:
         M_exit = cycle_parameters["M_exit"]
 
         self.inlet = upstream
-        self.exit = self.inlet
+        self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = exit_idx
         self.exit.M = M_exit
         self.exit.W = self.inlet.W + mdot_cool
@@ -350,6 +352,93 @@ class Turbine:
         '''
 
 
+class Mixer:
+    def __init__(self, hot_inlet:Station, cold_inlet:Station, B): 
+        # Mhot is a design choice that can alternatively be cold_inlet.M
+
+        if B == 0: self.exit = copy.deepcopy(hot_inlet)
+        
+        # Hot Stream (static properties)
+        hot_inlet.T = hot_inlet.Tt * (1 + (hot_inlet.gamma - 1)/2 * hot_inlet.M**2)^(-1)
+        hot_inlet.P = hot_inlet.Pt * (1 + (hot_inlet.gamma - 1)/2 * hot_inlet.M**2)^(-hot_inlet.gamma / (hot_inlet.gamma - 1))
+        hot_inlet.rho = hot_inlet.P / (hot_inlet.R*hot_inlet.T)
+        hot_inlet.V = hot_inlet.M * numpy.sqrt(hot_inlet.gamma * hot_inlet.R * hot_inlet.T)
+        hot_inlet.A = hot_inlet.W / (hot_inlet.rho*hot_inlet.V)
+        momentum_hot = hot_inlet.W*hot_inlet.V + hot_inlet.A*hot_inlet.P
+
+        # Cold Stream (static properties)
+        cold_inlet.P = hot_inlet.P
+        cold_inlet.M = numpy.sqrt(2 / (cold_inlet.gamma - 1) * ((cold_inlet.Pt/cold_inlet.P)**((cold_inlet.gamma - 1)/cold_inlet.gamma) - 1))
+        cold_inlet.T = cold_inlet.Tt * (1 + (cold_inlet.gamma - 1)/2 * cold_inlet.M**2)**(-1)
+        cold_inlet.rho = cold_inlet.P / (cold_inlet.R*cold_inlet.T)
+        cold_inlet.V = cold_inlet.M * numpy.sqrt(cold_inlet.gamma * cold_inlet.R * cold_inlet.T)
+        cold_inlet.A = cold_inlet.W / (cold_inlet.rho*cold_inlet.V)
+        cold_inlet.set_statics(cold_inlet.M)
+        momentum_cold = cold_inlet.W*cold_inlet.V + cold_inlet.A*cold_inlet.P
+
+        if cold_inlet.P > cold_inlet.Pt:
+            raise ValueError("Static pressure is larger than the total pressure (not physically possible). A larger Mhot must be chosen.")
+
+        # Mixer Exit Stream
+        exit_idx = "6"
+        exit_W = hot_inlet.W + cold_inlet.W
+        exit_Wf = hot_inlet.Wf
+        exit_A = hot_inlet.A + cold_inlet.A
+        exit_Tt = (hot_inlet.W*hot_inlet.Tt + cold_inlet.W*cold_inlet.Tt) / (exit_station.W)
+        exit_FAR = exit_Wf / (exit_station.W - exit_Wf)
+        exit_R = Station.get_R(exit_FAR)
+        exit_Cp = Station.get_cp(exit_Tt, exit_FAR)
+        exit_gamma = exit_Cp / (exit_Cp - exit_R)
+        K = (momentum_hot + momentum_cold)^2 * (exit_gamma / (exit_W^2 * exit_Tt * exit_R))
+        exit_M = numpy.sqrt(((2*exit_gamma - K) + numpy.sqrt((K - 2*exit_gamma)^2 + 4*(((exit_gamma-1)/2)*K-exit_gamma^2))) / (2*((exit_gamma-1)/2*K-exit_gamma^2)))
+        exit_T = exit_Tt * (1 + (exit_gamma - 1)/2 * exit_M^2)^(-1)
+        exit_P = (exit_W*numpy.sqrt(exit_R*exit_T)/(exit_A*exit_M*numpy.sqrt(exit_gamma)))
+        exit_Pt = exit_P * (exit_Tt/exit_T)^(exit_gamma / (exit_gamma - 1))
+        exit_station = Station(exit_W, exit_Wf, exit_Tt, exit_Pt, exit_FAR, idx=exit_idx, M=exit_M)
+        exit_station.set_statics(exit_station.M)
+
+
+class Afterburner:
+    def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
+        engine = cycle_parameters["engine"]
+        toggle = cycle_parameters["toggle"]
+        Ttmax = cycle_parameters["AET"]
+        pi_ab_on = cycle_parameters["pi off"]
+        pi_ab_off = cycle_parameters["pi on"]
+        eta = cycle_parameters["efficiency"]
+        LHV = engine.LHV
+
+        self.inlet = upstream
+        self.exit = copy.deepcopy(self.inlet)
+        self.exit.idx = "7"
+
+        # Handle different engine modes (afterburner on or off)
+        if toggle == 0: self.exit.Pt = self.inlet.Pt * pi_ab_off # Afterburner off
+        elif toggle == 1: # Afterburner on
+            self.exit.Pt = self.inlet.Pt * pi_ab_on
+            Tt_Ttstar1 = get_Tt_Ttstar(self.inlet.M, self.inlet.gamma)
+            Tt_Ttstar2 = Ttmax * (Tt_Ttstar1) / self.inlet.Tt
+            Ttstar = 1 / Tt_Ttstar1 * self.inlet.Tt
+
+            # Check if the afteburner chokes before reaching the given total
+            # temperature (based on Rayleigh flow theory)
+            if Tt_Ttstar2 > 1:
+                print(f"Given Afterburner Exit Temperature exceeds maximum allowed amount {Ttstar}.\n"
+                       "This value has been set as the exit total temperatue and a lower value is recommended to be chosen.\n\n")
+                self.exit.Tt = Ttstar
+                self.exit.M = 1
+            elif Tt_Ttstar2 <= 1:
+                self.exit.Tt = Ttmax
+                self.exit.M = bisection(get_Tt_Ttstar, Tt_Ttstar2, 1, 0, self.inlet.gamma)
+
+            self.exit.FAR = Burner.get_FAR(self, self.exit.Tt, self.inlet.Tt, self.inlet.FAR, LHV, eta) 
+            self.exit.Wf = (self.inlet.W - self.inlet.Wf) * self.exit.FAR
+            self.exit.W = self.inlet.W + self.exit.Wf
+            self.exit.set_statics(self.exit.M)
+        elif toggle > 1: raise ValueError("Error: bypass factor cannot be greater than 1 (0<B<1).\n")
+        elif toggle < 0: raise ValueError("Error: bypass factor cannot be negative (0<B<1).\n")
+
+
 class Nozzle:
     def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
         # CYCLE ANALYSIS
@@ -374,7 +463,7 @@ class Nozzle:
         R = self.inlet.R
         critical_NPR = (1 + ((gamma-1) / 2))**(gamma / (gamma-1))
         NPR = self.inlet.Pt / Pinf
-        exit_station = self.inlet
+        exit_station = copy.deepcopy(self.inlet)
         exit_station.idx = 8 # Throat station
 
         if NPR >= critical_NPR:
@@ -399,7 +488,7 @@ class Nozzle:
         gamma = self.inlet.gamma
         cp = self.inlet.cp
         R = self.inlet.R
-        self.exit = self.throat = self.inlet
+        self.exit = self.throat = copy.deepcopy(self.inlet)
         self.throat.idx = 8
         self.exit.idx = 9
 
@@ -424,6 +513,12 @@ class Bleed:
         self.packing = packing
 
 class Engine:
+    '''
+    Essentially a turbojet core engine
+    will serve as a parent class to other architectures like turbofan, turboshaft, ramjet, etc.
+    Handles a recuperator and afterburner as well, but the default is just a core
+    '''
+
     def __init__(self, engine_parameters, components=None):
         # Design Parameters (metric units)
         self.PR = engine_parameters["PR"]
@@ -437,8 +532,32 @@ class Engine:
         # Ambient/Freestream
         self.ambient = Ambient(self.altitude, Minf=self.Minf)
 
-        # Architecture is empty by default (compnents must be added manually)
-        self.components = list()
+        # Architecture (Turbojet by Default)
+        self.architecture = components
+        self.components = self.get_components(self.architecture)
+
+    @property
+    def components(self): return self.get_components(self.architecture)
+
+    @components.setter
+    def components(self, value): self._components = value
+
+    def get_components(self, architecture):
+        # Defualt turbojet design parameters
+        if architecture == None: 
+            intake_parameters = {"engine": self, "total pressure recovery": 0.98, "M_inlet": 0.6, "M_exit": 0.55}
+            compressor_parameters = {"engine": self, "e": 0.91, "M_exit": 0.3, "idx_inlet": 2, "idx_exit": 3}
+            burner_parameters = {"engine": self, "total pressure loss": 0.05, "efficiency": 0.99, "M_exit": 0.4, "idx_exit": 4}
+            turbine_parameters = {"e": 0.8, "mechanical efficiency": 0.99, "M_exit": 0.5, "idx_exit": 5}
+            nozzle_parameters = {"engine": self, "C/CD": "C", "discharge coefficient": 0.97, "velocity coefficient": 0.98}
+            architecture = [
+                            inlet := Inlet(intake_parameters),
+                            compressor := Compressor(inlet.exit, compressor_parameters),
+                            burner := Burner(compressor.exit, burner_parameters),
+                            turbine :=  Turbine(burner.exit, compressor, turbine_parameters),
+                            exhaust :=  Nozzle(turbine.exit, nozzle_parameters)
+            ]
+        return architecture
 
 
     def get_station_data(self): 
@@ -491,4 +610,4 @@ class Engine:
 
 
 class BypassEngine(Engine): pass
-# handles turbofan (mixed/unmixed, afterburner) and variable bypass ramjet
+# handles turbofan (mixed/unmixed) and variable bypass ramjet

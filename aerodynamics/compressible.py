@@ -23,10 +23,11 @@ def iterate(function_name, LHS, guess=None):
     return guess
 
 
-def bisection(function_name, LHS, guess_high, guess_low):
+# Bisection method (faster than brute force)
+def bisection(function_name, LHS, guess_high, guess_low, *args):
     error_threshold = 10**-4
     guess_mid = (guess_high + guess_low) / 2
-    fmid = function_name(guess_mid)
+    fmid = function_name(guess_mid, *args)
     error = (LHS - fmid) / LHS
 
     while abs(error) > error_threshold:
@@ -34,9 +35,10 @@ def bisection(function_name, LHS, guess_high, guess_low):
         elif fmid > LHS: guess_high = guess_mid
 
         guess_mid = (guess_high + guess_low) / 2
-        fmid = function_name(guess_mid)
+        fmid = function_name(guess_mid, *args)
         error = (LHS - fmid) / LHS
     return guess_mid
+
 
 # A.1
 def isentropic(parameter, gamma, lookup_key="M"):
@@ -195,66 +197,69 @@ def oblique_shock(M1, parameter, gamma, lookup_key="deflection angle"):
     M2 = Mn2 / numpy.sin(beta - theta)
     return [M2, theta, beta, Pt2_P1, P2_P1, T2_T1]
 
-# A.3
-def rayleigh(parameter, gamma, lookup_key="M"):
-    def get_P_Pstar(M):
-        P_Pstar = (1 + gamma) / (1 + gamma*M**2)
-        return P_Pstar
-    def get_Pt_Ptstar(M):
-        Pt_Ptstar = ((1 + gamma) / (1 + gamma*M**2)) * ((1 + ((gamma - 1)/2) * M**2) / ((gamma + 1) / 2))**(gamma / (gamma - 1))
-        return Pt_Ptstar
-    def get_T_Tstar(M):
-        T_Tstar = (M**2)*((1 + gamma) / (1 + gamma*M**2))**2
-        return T_Tstar
-    def get_Tt_Ttstar(M):
-        Tt_Ttstar = (M**2)*(((1 + gamma) / (1 + gamma*M**2))**2) * ((1 + ((gamma - 1)/2) * M**2) / ((gamma + 1) / gamma))
-        return Tt_Ttstar
-    def get_rho_rhostar(M):
-        rho_rhostar = ((1 + gamma*M**2) / (1 + gamma)) / M**2
-        return rho_rhostar
 
+'''
+RAYLEIGH FLOW FUNCTIONS
+'''
+def get_P_Pstar(M, gamma):
+    P_Pstar = (1 + gamma) / (1 + gamma*M**2)
+    return P_Pstar
+def get_Pt_Ptstar(M, gamma):
+    Pt_Ptstar = ((1 + gamma) / (1 + gamma*M**2)) * ((1 + ((gamma - 1)/2) * M**2) / ((gamma + 1) / 2))**(gamma / (gamma - 1))
+    return Pt_Ptstar
+def get_T_Tstar(M, gamma):
+    T_Tstar = (M**2)*((1 + gamma) / (1 + gamma*M**2))**2
+    return T_Tstar
+def get_Tt_Ttstar(M, gamma):
+    Tt_Ttstar = (M**2)*(((1 + gamma) / (1 + gamma*M**2))**2) * ((1 + ((gamma - 1)/2) * M**2) / ((gamma + 1) / gamma))
+    return Tt_Ttstar
+def get_rho_rhostar(M, gamma):
+    rho_rhostar = ((1 + gamma*M**2) / (1 + gamma)) / M**2
+    return rho_rhostar
+
+def rayleigh(parameter, gamma, lookup_key="M"):
     match lookup_key:
         case "M":
             M = parameter
-            P_Pstar = get_P_Pstar(parameter)
-            Pt_Ptstar = get_Pt_Ptstar(parameter)
-            T_Tstar = get_T_Tstar(parameter)
-            Tt_Ttstar = get_Tt_Ttstar(parameter)
-            rho_rhostar = get_rho_rhostar(parameter)
+            P_Pstar = get_P_Pstar(parameter, gamma)
+            Pt_Ptstar = get_Pt_Ptstar(parameter, gamma)
+            T_Tstar = get_T_Tstar(parameter, gamma)
+            Tt_Ttstar = get_Tt_Ttstar(parameter, gamma)
+            rho_rhostar = get_rho_rhostar(parameter, gamma)
         case "static temperature ratio":
             M = iterate(get_T_Tstar, parameter)
-            P_Pstar = get_P_Pstar(M)
-            Pt_Ptstar = get_Pt_Ptstar(M)
+            P_Pstar = get_P_Pstar(M, gamma)
+            Pt_Ptstar = get_Pt_Ptstar(M, gamma)
             T_Tstar = parameter
-            Tt_Ttstar = get_Tt_Ttstar(M)
-            rho_rhostar = get_rho_rhostar(M)
+            Tt_Ttstar = get_Tt_Ttstar(M, gamma)
+            rho_rhostar = get_rho_rhostar(M, gamma)
         case "total temperature ratio":
             M = iterate(get_Tt_Ttstar, parameter)
-            P_Pstar = get_P_Pstar(M)
-            Pt_Ptstar = get_Pt_Ptstar(M)
-            T_Tstar = get_T_Tstar(M)
+            P_Pstar = get_P_Pstar(M, gamma)
+            Pt_Ptstar = get_Pt_Ptstar(M, gamma)
+            T_Tstar = get_T_Tstar(M, gamma)
             Tt_Ttstar = parameter
-            rho_rhostar = get_rho_rhostar(M)
+            rho_rhostar = get_rho_rhostar(M, gamma)
         case "static pressure ratio":
             M = iterate(get_P_Pstar, parameter)
             P_Pstar = parameter
-            Pt_Ptstar = get_Pt_Ptstar(M)
-            T_Tstar = get_P_Pstar(M)
-            Tt_Ttstar = get_Tt_Ttstar(M)
-            rho_rhostar = get_rho_rhostar(M)
+            Pt_Ptstar = get_Pt_Ptstar(M, gamma)
+            T_Tstar = get_P_Pstar(M, gamma)
+            Tt_Ttstar = get_Tt_Ttstar(M, gamma)
+            rho_rhostar = get_rho_rhostar(M, gamma)
         case "total pressure ratio":
             M = iterate(get_Pt_Ptstar, parameter)
-            P_Pstar = get_P_Pstar(M)
+            P_Pstar = get_P_Pstar(M, gamma)
             Pt_Ptstar = parameter
-            T_Tstar = get_T_Tstar(M)
-            Tt_Ttstar = get_Tt_Ttstar(M)
-            rho_rhostar = get_rho_rhostar(M)
+            T_Tstar = get_T_Tstar(M, gamma)
+            Tt_Ttstar = get_Tt_Ttstar(M, gamma)
+            rho_rhostar = get_rho_rhostar(M, gamma)
         case "density ratio":
             M = iterate(get_rho_rhostar, parameter)
-            P_Pstar = get_P_Pstar(M)
-            Pt_Ptstar = get_Pt_Ptstar(M)
-            T_Tstar = get_T_Tstar(M)
-            Tt_Ttstar = get_Tt_Ttstar(M)
+            P_Pstar = get_P_Pstar(M, gamma)
+            Pt_Ptstar = get_Pt_Ptstar(M, gamma)
+            T_Tstar = get_T_Tstar(M, gamma)
+            Tt_Ttstar = get_Tt_Ttstar(M, gamma)
             rho_rhostar = parameter
 
     return [M, P_Pstar, Pt_Ptstar, T_Tstar, Tt_Ttstar, rho_rhostar]
