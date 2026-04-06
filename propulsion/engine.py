@@ -38,11 +38,11 @@ class Station:
     column_names = [
                     "Station",
                     "W [kg/sec]", 
-                    "Wc [kg/sec]", 
-                    "Wf [kg/sec]", 
                     "Tt [K]",
                     "Pt [Pa]",
                     "ht [kJ/kg]",
+                    "Wc [kg/sec]", 
+                    "Wf [kg/sec]", 
                     "FAR",
                     "M",
                     "Ts [K]",
@@ -69,7 +69,7 @@ class Station:
         if self.FAR != None: self.FAR = self.get_FAR()
 
     def __str__(self):
-        return f"Station {self.idx}\nW = {self.W}\nWc = {self.Wc}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt}\M = {self.M}"
+        return f"Station {self.idx}\nW = {self.W}\nWc = {self.Wc}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt}\nM = {self.M}"
 
     @property
     def Wc(self): return self.get_Wc(self.W, self.Tt, self.Pt)
@@ -177,8 +177,8 @@ class Station:
         return T
 
     def get_station_data(self):
-        if self.M != None: station_data = [self.idx, self.W, self.Wc, self.Wf, self.Tt, self.Pt, self.ht, self.FAR, self.M, self.T, self.h, self.P, self.V, self.rho, self.area]
-        else: station_data = [self.idx, self.W, self.Wc, self.Wf, self.Tt, self.Pt, self.ht, self.FAR, None, None, None, None, None, None, None]
+        if self.M != None: station_data = [self.idx, self.W, self.Tt, self.Pt, self.ht/1000, self.Wc, self.Wf, self.FAR, self.M, self.T, self.h/1000, self.P, self.V, self.rho, self.area]
+        else: station_data = [self.idx, self.W, self.Tt, self.Pt, self.ht/1000, self.Wc, self.Wf, self.FAR, None, None, None, None, None, None, None]
         return station_data
 
 
@@ -507,6 +507,37 @@ class Nozzle:
         self.exit.M = numpy.sqrt((2/(gamma - 1)) * ((self.exit.Pt/self.exit.P)^((gamma-1)/gamma) - 1)); # Isentropic Relation
         self.exit.set_statics(self.exit.M)
 
+class Recuperator:
+    def __init__(self, cold_inlet:Station, cycle_parameters):
+        self.engine = cycle_parameters["engine"]
+        self.Mexit_cold = cycle_parameters["Mexit_cold"]
+        self.Mexit_hot = cycle_parameters["Mexit_hot"]
+        self.pi_cold = cycle_parameters["pi_cold"]
+        self.pi_hot = cycle_parameters["pi_hot"]
+        self.delta_ht = cycle_parameters["delta_ht"] * 10**3 # kJ/kg to J/kg
+
+        self.cold_inlet = copy.deepcopy(cold_inlet)
+        self.cold_inlet.idx = "3.06"
+        self.cold_exit = copy.deepcopy(self.cold_inlet)
+        self.cold_exit.idx = "3.07"
+        self.cold_exit.Tt = self.cold_exit.T_from_H(self.cold_inlet.ht+self.delta_ht, self.cold_exit.FAR, self.engine.TET, self.cold_inlet.Tt)
+        self.cold_exit.Pt *= self.pi_cold
+        self.cold_exit.M = self.Mexit_cold
+        self.cold_exit.set_statics(self.cold_exit.M)
+    
+    def pass_hot_stream(self, hot_upstream):
+        self.hot_inlet = hot_upstream
+        self.hot_inlet.idx = "6.07"
+        self.hot_exit = copy.deepcopy(self.hot_inlet)
+        self.hot_exit.idx = "6.08"
+        self.hot_exit.Tt = self.cold_exit.T_from_H(self.hot_inlet.ht-self.delta_ht, self.hot_exit.FAR, self.hot_inlet.Tt, 0)
+        self.hot_exit.Pt *= self.pi_hot
+        self.hot_exit.M = self.Mexit_hot
+        self.hot_exit.set_statics(self.hot_exit.M)
+
+        return self.hot_exit
+
+
 class Bleed:
     def __init__(self, cooling, packing):
         self.cooling = cooling
@@ -568,9 +599,14 @@ class Engine:
                 raw_data.append(component.freestream.get_station_data())
                 raw_data.append(component.inlet.get_station_data())
                 raw_data.append(component.exit.get_station_data())
+            elif isinstance(component, Recuperator): 
+                raw_data.append(component.cold_inlet.get_station_data())
+                raw_data.append(component.cold_exit.get_station_data())
+            elif isinstance(component, Station): raw_data.append(component.get_station_data())
             else: raw_data.append(component.exit.get_station_data())
 
-        station_data = pandas.DataFrame(raw_data, columns=Station.column_names)
+        rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
+        station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
         return station_data
 
 
