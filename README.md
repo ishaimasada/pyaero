@@ -9,9 +9,9 @@ Split into aerodynamics, stability, and propulsion categories (control code may 
   - functions for hypersonic vehicle design (Taylor-Maccoll integrator and Busemann Inlet) 
 - Propulsion contains programs that automate the jet engine design process.
   - the engine class is intended to wrap the preliminary design steps into a simple-to-manipulate object
-    - flight performance (constraint & mission analysis)
-    - design point cycle analysis
-  - preliminary component design functionality will be implemented soon
+    - flight performance (constraint & mission analysis) --> Not Implemented 
+    - design point cycle analysis --> Functional
+    - preliminary component design functionality --> Not Implemented
 - Stability contains a calculator for stability derivatives based on aircraft geometry
   - the geometry must be provided first and each value input into the program
   - the process is laborious because it acts as just a calculator right now
