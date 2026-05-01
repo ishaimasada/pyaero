@@ -39,3 +39,4 @@ performance = engine.get_performance()
 
 print(station_data)
 print(performance)
+engine.plot_thermo()

@@ -2,6 +2,7 @@
 Module for Cycle Analysis and preliminary component design 
 """
 
+import matplotlib.pyplot as plt
 import pandas
 import numpy
 import copy
@@ -39,7 +40,7 @@ class Station:
                     "Station",
                     "W [kg/sec]", 
                     "Tt [K]",
-                    "Pt [Pa]",
+                    "Pt [kPa]",
                     "ht [kJ/kg]",
                     "Wc [kg/sec]", 
                     "Wf [kg/sec]", 
@@ -47,7 +48,7 @@ class Station:
                     "M",
                     "Ts [K]",
                     "hs [kJ/kg]",
-                    "Ps [Pa]",
+                    "Ps [kPa]",
                     "V [m/sec]",
                     "rho [kg/m^3]",
                     "Area [m^2]"
@@ -69,7 +70,7 @@ class Station:
         if self.FAR != None: self.FAR = self.get_FAR()
 
     def __str__(self):
-        return f"Station {self.idx}\nW = {self.W}\nWc = {self.Wc}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt}\nM = {self.M}"
+        return f"Station {self.idx}\nW = {self.W}\nWc = {self.Wc}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt/1000}\nM = {self.M}"
 
     @property
     def Wc(self): return self.get_Wc(self.W, self.Tt, self.Pt)
@@ -177,8 +178,8 @@ class Station:
         return T
 
     def get_properties(self):
-        if self.M != None: station_data = [self.idx, self.W, self.Tt, self.Pt, self.ht/1000, self.Wc, self.Wf, self.FAR, self.M, self.T, self.h/1000, self.P, self.V, self.rho, self.area]
-        else: station_data = [self.idx, self.W, self.Tt, self.Pt, self.ht/1000, self.Wc, self.Wf, self.FAR, None, None, None, None, None, None, None]
+        if self.M != None: station_data = [self.idx, self.W, self.Tt, self.Pt/1000, self.ht/1000, self.Wc, self.Wf, self.FAR, self.M, self.T, self.h/1000, self.P/1000, self.V, self.rho, self.area]
+        else: station_data = [self.idx, self.W, self.Tt, self.Pt/1000, self.ht/1000, self.Wc, self.Wf, self.FAR, None, None, None, None, None, None, None]
         return station_data
 
 
@@ -554,6 +555,22 @@ class Bleed:
         self.cooling = cooling
         self.packing = packing
 
+def format_axes(ax, title, xlabel, ylabel):
+    ax.set_title(title, fontsize=14, weight='bold')
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+
+    ax.legend(frameon=False, loc="best")
+
+    # Grid control
+    ax.minorticks_on()
+    ax.grid(True, which='major', linestyle='--', linewidth=0.7, alpha=0.7)
+    ax.grid(True, which='minor', linestyle=':', linewidth=0.5, alpha=0.5)
+
+    # Clean spines
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
 class Engine:
     '''
     Essentially a turbojet core engine will serve as a parent class to other architectures like turbofan, turboshaft, ramjet, etc.
@@ -709,6 +726,32 @@ class Engine:
                                         }, index=[0])
 
         return performance
+
+
+    def plot_thermo(self):
+        Tt = self.get_station_data()["Tt [K]"]
+        Ts = self.get_station_data()["Ts [K]"]
+        Pt = self.get_station_data()["Pt [kPa]"]
+        Ps = self.get_station_data()["Ps [kPa]"]
+        stations = self.get_station_data()["Station"]
+
+        plt.close("all")
+        plt.style.use('seaborn-v0_8-whitegrid')
+
+        # Temperatures
+        fig1, ax1 = plt.subplots(num=1, figsize=(7, 4.5), dpi=120)
+        ax1.plot(stations, Tt, marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.5, linewidth=1, label="Total Temperature")
+        ax1.plot(stations, Ts, marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.5, linewidth=1, label="Static Temperature")
+        format_axes(ax1, "Temperature", "Station", "Temperature [K]")
+
+        # Pressures
+        fig2, ax2 = plt.subplots(num=2, figsize=(7, 4.5), dpi=120)
+        ax2.plot(stations, Pt, marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.5, linewidth=1, label="Total Pressure")
+        ax2.plot(stations, Ps, marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.5, linewidth=1, label="Static Pressure")
+        format_axes(ax2, "Pressure", "Station", "Pressure [Pa]")
+
+        plt.tight_layout()
+        plt.show()
 
 
     def optimize(self, performance_parameter):
