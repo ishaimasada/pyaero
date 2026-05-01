@@ -176,11 +176,15 @@ class Station:
             error = abs(hmid - h) / h
         return T
 
-    def get_station_data(self):
+    def get_properties(self):
         if self.M != None: station_data = [self.idx, self.W, self.Tt, self.Pt, self.ht/1000, self.Wc, self.Wf, self.FAR, self.M, self.T, self.h/1000, self.P, self.V, self.rho, self.area]
         else: station_data = [self.idx, self.W, self.Tt, self.Pt, self.ht/1000, self.Wc, self.Wf, self.FAR, None, None, None, None, None, None, None]
         return station_data
 
+
+class Component:
+    def __init__(self, *kwargs):
+        self.attributes = kwargs
 
 class Inlet:
     def __init__(self, cycle_parameters, component_parameters=None):
@@ -302,9 +306,9 @@ class Turbine:
             self.Vum3 = component_parameters["tangential velocity at mid radius station 3"]
             self.Rm3 = component_parameters["mid radius at station 3"]
             self.AR = component_parameters[" aspect ratio"]
-    
-            omega = self.rpm * (2*numpy.pi / 60)
             self.Vax3 = component_parameters["axial velocity"]
+
+            omega = self.rpm * (2*numpy.pi / 60)
 
     def solve_stage(self, R: list, omega, Vax, Vu_mid, Rm3):
         # Aerodynamics
@@ -364,6 +368,7 @@ class Mixer:
         hot_inlet.rho = hot_inlet.P / (hot_inlet.R*hot_inlet.T)
         hot_inlet.V = hot_inlet.M * numpy.sqrt(hot_inlet.gamma * hot_inlet.R * hot_inlet.T)
         hot_inlet.A = hot_inlet.W / (hot_inlet.rho*hot_inlet.V)
+        self.hot_inlet = hot_inlet
         momentum_hot = hot_inlet.W*hot_inlet.V + hot_inlet.A*hot_inlet.P
 
         # Cold Stream (static properties)
@@ -374,6 +379,7 @@ class Mixer:
         cold_inlet.V = cold_inlet.M * numpy.sqrt(cold_inlet.gamma * cold_inlet.R * cold_inlet.T)
         cold_inlet.A = cold_inlet.W / (cold_inlet.rho*cold_inlet.V)
         cold_inlet.set_statics(cold_inlet.M)
+        self.cold_inlet = cold_inlet
         momentum_cold = cold_inlet.W*cold_inlet.V + cold_inlet.A*cold_inlet.P
 
         if cold_inlet.P > cold_inlet.Pt:
@@ -507,8 +513,10 @@ class Nozzle:
         self.exit.M = numpy.sqrt((2/(gamma - 1)) * ((self.exit.Pt/self.exit.P)^((gamma-1)/gamma) - 1)); # Isentropic Relation
         self.exit.set_statics(self.exit.M)
 
+
 class Recuperator:
-    def __init__(self, cold_inlet:Station, cycle_parameters):
+    def __init__(self, cold_inlet:Station, cycle_parameters, component_parameters=None):
+        self.cyce_parameters = cycle_parameters
         self.engine = cycle_parameters["engine"]
         self.Mexit_cold = cycle_parameters["Mexit_cold"]
         self.Mexit_hot = cycle_parameters["Mexit_hot"]
@@ -525,6 +533,9 @@ class Recuperator:
         self.cold_exit.M = self.Mexit_cold
         self.cold_exit.set_statics(self.cold_exit.M)
     
+        # COMPONENT DESIGN
+        if component_parameters != None: pass
+
     def pass_hot_stream(self, hot_upstream):
         self.hot_inlet = hot_upstream
         self.hot_inlet.idx = "6.07"
@@ -545,12 +556,10 @@ class Bleed:
 
 class Engine:
     '''
-    Essentially a turbojet core engine
-    will serve as a parent class to other architectures like turbofan, turboshaft, ramjet, etc.
+    Essentially a turbojet core engine will serve as a parent class to other architectures like turbofan, turboshaft, ramjet, etc.
     Handles a recuperator and afterburner as well, but the default is just a core
     '''
-
-    def __init__(self, engine_parameters, components=None):
+    def __init__(self, engine_parameters, parameters=None):
         # Design Parameters (metric units)
         self.PR = engine_parameters["PR"]
         self.TET = engine_parameters["TET"]
@@ -564,47 +573,112 @@ class Engine:
         self.ambient = Ambient(self.altitude, Minf=self.Minf)
 
         # Architecture (Turbojet by Default)
-        self.architecture = components
-        self.components = self.get_components(self.architecture)
+        self.set_components(parameters)
+
 
     @property
-    def components(self): return self.get_components(self.architecture)
+    def components(self): return self._components
 
     @components.setter
     def components(self, value): self._components = value
 
-    def get_components(self, architecture):
+    def set_components(self, parameters):
         # Defualt turbojet design parameters
-        if architecture == None: 
+        if parameters == None:
             intake_parameters = {"engine": self, "total pressure recovery": 0.98, "M_inlet": 0.6, "M_exit": 0.55}
             compressor_parameters = {"engine": self, "e": 0.91, "M_exit": 0.3, "idx_inlet": 2, "idx_exit": 3}
             burner_parameters = {"engine": self, "total pressure loss": 0.05, "efficiency": 0.99, "M_exit": 0.4, "idx_exit": 4}
             turbine_parameters = {"e": 0.8, "mechanical efficiency": 0.99, "M_exit": 0.5, "idx_exit": 5}
             nozzle_parameters = {"engine": self, "C/CD": "C", "discharge coefficient": 0.97, "velocity coefficient": 0.98}
-            architecture = [
-                            inlet := Inlet(intake_parameters),
-                            compressor := Compressor(inlet.exit, compressor_parameters),
-                            burner := Burner(compressor.exit, burner_parameters),
-                            turbine :=  Turbine(burner.exit, compressor, turbine_parameters),
-                            exhaust :=  Nozzle(turbine.exit, nozzle_parameters)
-            ]
-        return architecture
+        else:
+            intake_parameters = parameters["inlet"]
+            compressor_parameters = parameters["compressor"]
+            burner_parameters = parameters["burner"]
+            turbine_parameters = parameters["turbine"]
+            nozzle_parameters = parameters["nozzle"]
+        
+        self.components = [
+                        inlet := Inlet(intake_parameters),
+                        compressor := Compressor(inlet.exit, compressor_parameters),
+                        burner := Burner(compressor.exit, burner_parameters),
+                        turbine := Turbine(burner.exit, compressor, turbine_parameters),
+                        exhaust := Nozzle(turbine.exit, nozzle_parameters)
+        ]
+
+        self.inlet = inlet
+        self.compressor = compressor
+        self.burner = burner
+        self.turbine = turbine
+        self.exhaust = exhaust
+
+
+    def toggle_afterburner(self, parameters=None, toggle=False):
+        match toggle:
+            case False:
+                for idx, component in enumerate(self.components):
+                    if isinstance(component, Afterburner):
+                        delattr(self, "afterburner")
+                        self.components.remove(idx)
+                self.afterburner = False
+            case True:
+                if parameters == None: ValueError("No afterburner parameters given. Must provide component parameters.\n")
+                if any(isinstance(component, Afterburner) for component in self.components): 
+                    return
+                else:
+                    for idx, component in enumerate(self.components):
+                        if isinstance(component, Nozzle):
+                            insert_idx = idx
+                    self.components.insert(insert_idx, afterburner := Afterburner(self.components[insert_idx-1].exit, parameters)) 
+                self.afterburner = afterburner
+
+
+    def toggle_recuperator(self, parameters=None, toggle=False):
+        match toggle:
+            case False:
+                for idx, component in enumerate(self.components):
+                    if isinstance(component, Recuperator):
+                        delattr(self, "recuperator")
+                        self.components.remove(idx)
+                self.recuperator = False
+            case True:
+                if parameters == None: ValueError("No recuperator parameters given. Must provide component parameters.\n")
+                recuperator = Recuperator(self.compressor.exit, parameters)
+                if any(isinstance(component, Recuperator) for component in self.components): 
+                    return
+                else:
+                    for idx, component in enumerate(self.components):
+                        if isinstance(component, Burner): 
+                            insert_idx = idx
+                    self.components.insert(insert_idx, recuperator)
+                self.recuperator = recuperator
 
 
     def get_station_data(self): 
         raw_data = list()
 
-        for component in self.components:
-            if isinstance(component, Inlet):
-                raw_data.append(component.freestream.get_station_data())
-                raw_data.append(component.inlet.get_station_data())
-                raw_data.append(component.exit.get_station_data())
-            elif isinstance(component, Recuperator): 
-                raw_data.append(component.cold_inlet.get_station_data())
-                raw_data.append(component.cold_exit.get_station_data())
-            elif isinstance(component, Station): raw_data.append(component.get_station_data())
-            else: raw_data.append(component.exit.get_station_data())
-
+        # Handle Recuperator station data (afterburner is treated like the other components)
+        if hasattr(self, "recuperator"):
+            for component in self.components:
+                if isinstance(component, Inlet):
+                    raw_data.append(component.freestream.get_properties())
+                    raw_data.append(component.inlet.get_properties())
+                    raw_data.append(component.exit.get_properties())
+                elif isinstance(component, Recuperator):
+                    raw_data.append(component.cold_exit.get_properties())
+                elif isinstance(component, Turbine):
+                    raw_data.append(component.exit.get_properties())
+                    raw_data.append(self.recuperator.pass_hot_stream(component.exit).get_properties())
+                else:
+                    raw_data.append(component.exit.get_properties())
+        else:
+            for component in self.components:
+                if isinstance(component, Inlet):
+                    raw_data.append(component.freestream.get_properties())
+                    raw_data.append(component.inlet.get_properties())
+                    raw_data.append(component.exit.get_properties())
+                else:
+                    raw_data.append(component.exit.get_properties())
+                    
         rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
         station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
         return station_data
