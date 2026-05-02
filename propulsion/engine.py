@@ -183,10 +183,6 @@ class Station:
         return station_data
 
 
-class Component:
-    def __init__(self, *kwargs):
-        self.attributes = kwargs
-
 class Inlet:
     def __init__(self, cycle_parameters, component_parameters=None):
         # CYCLE ANALYSIS
@@ -195,11 +191,16 @@ class Inlet:
         Pt_recovery = cycle_parameters["total pressure recovery"]
         engine = cycle_parameters["engine"]
         freestream = engine.ambient
-        D1 = engine.front_diameter * 2.54 / 100 # in to m
-        [_, _, _, rhot_rho, _] = isentropic(freestream.Minf, freestream.gamma, lookup_key="M")
-        A1 = numpy.pi * (D1 / 2)**2
-        rho1 = freestream.rhot * (1/rhot_rho)
-        W1 = freestream.Vinf * rho1 * A1
+
+        if hasattr(engine, "front_diameter"):
+            D1 = engine.front_diameter * 2.54 / 100 # in to m
+            [_, _, _, rhot_rho, _] = isentropic(freestream.Minf, freestream.gamma, lookup_key="M")
+            A1 = numpy.pi * (D1 / 2)**2
+            rho1 = freestream.rhot * (1/rhot_rho)
+            W1 = freestream.Vinf * rho1 * A1
+        elif hasattr(engine, "W"):
+            W1 = engine.W
+
         freestream_FAR = freestream_Wf = inlet_FAR = inlet_Wf = exit_FAR = exit_Wf = 0
 
         self.freestream = Station(W1, freestream_Wf, freestream.Tt, freestream.Pt, freestream_FAR, M=freestream.Minf, idx=0) # Station 0
@@ -245,14 +246,20 @@ class Burner:
         M_exit = cycle_parameters["M_exit"]
         engine = cycle_parameters["engine"]
         LHV = engine.LHV
-        TET = engine.TET
-
         self.inlet = upstream
         self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = exit_idx
         self.exit.M = M_exit
-        FAR = self.get_FAR(TET, self.inlet.Tt, 0, LHV, eta_b)
-        self.exit.Wf = self.inlet.W * FAR
+
+        if hasattr(engine, "TET"):
+            TET = engine.TET
+            FAR = self.get_FAR(TET, self.inlet.Tt, self.inlet.FAR, LHV, eta_b)
+            self.exit.Wf = self.inlet.W * FAR
+        elif hasattr(engine, "Wf"):
+            self.exit.Wf = engine.Wf
+            FAR = self.exit.Wf / upstream.W
+            TET = bisection(self.get_FAR, FAR, 1800, 100, self.inlet.Tt, 0, LHV, eta_b)
+
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
         self.exit.Pt = self.inlet.Pt * (1 - Ptloss_b)
         self.exit.Tt = TET
@@ -266,13 +273,11 @@ class Burner:
         h1 = self.inlet.get_ht(T1, FAR1)
         tolerance = 0.00001
         error = (abs(FAR - FARnew) / FARnew) 
-        
         while error > tolerance:
             FAR = FARnew
             h2 = self.exit.get_ht(T2, FAR)
             FARnew = (h2 - h1) / (LHV * eta)
             error = (abs(FAR - FARnew) / FARnew) 
-
         return FARnew
         
 
@@ -555,11 +560,9 @@ class Bleed:
         self.cooling = cooling
         self.packing = packing
 
-def format_axes(ax, title, xlabel, ylabel):
+def format_axes(ax, title, ylabel):
     ax.set_title(title, fontsize=14, weight='bold')
-    ax.set_xlabel(xlabel, fontsize=12)
     ax.set_ylabel(ylabel, fontsize=12)
-
     ax.legend(frameon=False, loc="best")
 
     # Grid control
@@ -571,23 +574,28 @@ def format_axes(ax, title, xlabel, ylabel):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
+
 class Engine:
     '''
     Essentially a turbojet core engine will serve as a parent class to other architectures like turbofan, turboshaft, ramjet, etc.
     Handles a recuperator and afterburner as well, but the default is just a core
     '''
-    def __init__(self, engine_parameters, parameters=None):
+    def __init__(self, engine_parameters, burner="TET", size="diameter", parameters=None):
         # Design Parameters (metric units)
         self.PR = engine_parameters["PR"]
-        self.TET = engine_parameters["TET"]
         self.LHV = engine_parameters["LHV"]
-        self.bleed = engine_parameters["bleed"]
         self.Minf = engine_parameters["Minf"]
         self.altitude = engine_parameters["altitude"]
-        self.front_diameter = engine_parameters["front face diameter"] # inches
-
-        # Ambient/Freestream
         self.ambient = Ambient(self.altitude, Minf=self.Minf)
+        if "bleed" in engine_parameters: self.bleed = engine_parameters["bleed"]
+
+        match size:
+            case "mdot": self.W = engine_parameters["mdot"]
+            case "diameter": self.front_diameter = engine_parameters["front face diameter"] # inches
+        
+        match burner:
+            case "TET": self.TET = engine_parameters["TET"]
+            case "mdotf": self.Wf = engine_parameters["mdotf"]
 
         # Architecture (Turbojet by Default)
         self.set_components(parameters)
@@ -701,7 +709,7 @@ class Engine:
         return station_data
 
 
-    def get_performance(self):
+    def display_performance(self):
         """ Performance Parameters """
         station_data = self.get_station_data()
 
@@ -724,8 +732,7 @@ class Engine:
                                          "Thermal Efficiency": eta_th,
                                          "Overall Efficiency": eta_o
                                         }, index=[0])
-
-        return performance
+        print(performance)
 
 
     def plot_thermo(self):
@@ -734,21 +741,26 @@ class Engine:
         Pt = self.get_station_data()["Pt [kPa]"]
         Ps = self.get_station_data()["Ps [kPa]"]
         stations = self.get_station_data()["Station"]
+        marker = "o"
+        size = 4
+        color = "white"
+        edge = 1.5
+        width = 1
 
         plt.close("all")
         plt.style.use('seaborn-v0_8-whitegrid')
+        fig, axes = plt.subplots(2, 1, figsize=(7, 7), dpi=120, sharex=True)
 
         # Temperatures
-        fig1, ax1 = plt.subplots(num=1, figsize=(7, 4.5), dpi=120)
-        ax1.plot(stations, Tt, marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.5, linewidth=1, label="Total Temperature")
-        ax1.plot(stations, Ts, marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.5, linewidth=1, label="Static Temperature")
-        format_axes(ax1, "Temperature", "Station", "Temperature [K]")
+        axes[0].plot(stations, Tt, marker=marker, markersize=size, markerfacecolor=color, markeredgewidth=edge, linewidth=width, label="Total Temperature")
+        axes[0].plot(stations, Ts, marker=marker, markersize=size, markerfacecolor=color, markeredgewidth=edge, linewidth=width, label="Static Temperature")
+        format_axes(axes[0], "Temperature", "Temperature [K]")
 
         # Pressures
-        fig2, ax2 = plt.subplots(num=2, figsize=(7, 4.5), dpi=120)
-        ax2.plot(stations, Pt, marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.5, linewidth=1, label="Total Pressure")
-        ax2.plot(stations, Ps, marker="o", markersize=4, markerfacecolor="white", markeredgewidth=1.5, linewidth=1, label="Static Pressure")
-        format_axes(ax2, "Pressure", "Station", "Pressure [Pa]")
+        axes[1].plot(stations, Pt, marker=marker, markersize=size, markerfacecolor=color, markeredgewidth=edge, linewidth=width, label="Total Pressure")
+        axes[1].plot(stations, Ps, marker=marker, markersize=size, markerfacecolor=color, markeredgewidth=edge, linewidth=width, label="Static Pressure")
+        format_axes(axes[1], "Pressure", "Pressure [Pa]")
+        axes[1].set_xlabel("Station", fontsize=11)
 
         plt.tight_layout()
         plt.show()

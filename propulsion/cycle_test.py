@@ -12,11 +12,11 @@ os.chdir(directory)
 from engine import *
 
 # Initialize engine object
-engine_parameters = {"PR": 5, "TET": 1510, "LHV": 43.15*10**6, "Minf": 0.85, "altitude": 12192, "front face diameter": 47.7, "bleed": Bleed(cooling=0, packing=0)}
-engine = Engine(engine_parameters)
+engine_parameters = {"PR": 3.6, "mdotf": 0.0145, "LHV": 43.15*10**6, "Minf": 0, "altitude": 0, "mdot": 0.53, "bleed": Bleed(cooling=0, packing=0)}
+engine = Engine(engine_parameters, burner="mdotf", size="mdot")
 
 # Define custom architecture
-intake_parameters = {"engine": engine, "total pressure recovery": 0.98, "M_inlet": 0.6, "M_exit": 0.55}
+intake_parameters = {"engine": engine, "total pressure recovery": 0.98, "M_inlet": 0.1, "M_exit": 0.3}
 compressor_parameters = {"engine": engine, "e": 0.91, "M_exit": 0.4, "idx_inlet": 2, "idx_exit": 3}
 recuperator_parameters = {"engine": engine, "pi_hot": 0.94, "pi_cold": 0.94, "delta_ht": 200, "Mexit_cold": 0.3, "Mexit_hot": 0.4}
 burner_parameters = {"engine": engine, "total pressure loss": 0.05, "efficiency": 0.99, "M_exit": 0.4, "idx_exit": 4}
@@ -32,11 +32,6 @@ parameters = {
 }
 
 engine.set_components(parameters)
-engine.toggle_recuperator(parameters=recuperator_parameters, toggle=True)
-
-station_data = engine.get_station_data()
-performance = engine.get_performance()
-
-print(station_data)
-print(performance)
+print(engine.get_station_data())
+engine.display_performance()
 engine.plot_thermo()

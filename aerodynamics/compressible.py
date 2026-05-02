@@ -10,15 +10,15 @@ os.chdir(directory)
 
 
 # Brute force iteration function
-def iterate(function_name, LHS, guess=None):
+def iterate(function_name, LHS, guess=None, *args):
     error_threshold = 10**-4
     if guess == None: guess = error_threshold
-    RHS = function_name(guess)
+    RHS = function_name(guess, *args)
     error = (LHS - RHS) / LHS
     while abs(error) > error_threshold:
         if error > 0: guess += error_threshold/2
         elif error < 0: guess -= error_threshold/2
-        RHS = function_name(guess)
+        RHS = function_name(guess, *args)
         error = (LHS - RHS) / LHS
     return guess
 
