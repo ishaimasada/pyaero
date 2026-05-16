@@ -1,0 +1,65 @@
+{
+    "parameters":{
+        "engine": {
+            "spools": 2,
+            "OPR": 10,
+            "TET": 1510,
+            "FPR": 1.2,
+            "mixed": true,
+            "Minf": 0.8,
+            "altitude": 40000,
+            "front face diameter": 0.53,
+            "LHV": 43100000
+        },
+        "intake": {
+            "total pressure recovery": 0.98,
+            "M_inlet": 0.1,
+            "M_exit": 0.3
+        },
+        "lpc": {
+            "machine": "axial",
+            "fan": false,
+            "e": 0.91,
+            "M_exit": 0.4,
+            "idx_inlet": 2,
+            "idx_exit": 3,
+            "cooling": 0.0,
+            "packing": 0.0
+        },
+        "hpc": {
+            "machine": "axial",
+            "fan": false,
+            "e": 0.91,
+            "M_exit": 0.4,
+            "idx_inlet": 2,
+            "idx_exit": 3,
+            "cooling": 0.03,
+            "packing": 0.01
+        },
+        "burner": {
+            "total pressure loss": 0.05,
+            "efficiency": 0.99,
+            "M_exit": 0.4,
+            "idx_exit": 4
+        },
+        "hpt": {
+            "machine": "axial",
+            "e": 0.95,
+            "mechanical efficiency": 0.99,
+            "M_exit": 0.43,
+            "idx_exit": 5
+        },
+        "lpt": {
+            "machine": "axial",
+            "e": 0.95,
+            "mechanical efficiency": 0.99,
+            "M_exit": 0.5,
+            "idx_exit": 5
+        },
+        "nozzle": {
+            "C/CD": "C",
+            "discharge coefficient": 0.97,
+            "velocity coefficient": 0.98
+        }
+    }
+}
