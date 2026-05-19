@@ -187,8 +187,8 @@ class Station:
 class Inlet:
     def __init__(self, cycle_parameters, component_parameters=None):
         # CYCLE ANALYSIS
-        M_inlet = cycle_parameters["M_inlet"]
-        M_exit = cycle_parameters["M_exit"]
+        M_inlet = cycle_parameters["inlet M"]
+        M_exit = cycle_parameters["exit M"]
         Pt_recovery = cycle_parameters["total pressure recovery"]
         engine = cycle_parameters["engine"]
         freestream = engine.ambient
@@ -218,38 +218,55 @@ class Compressor:
     def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
         # CYCLE ANALYSIS
         engine = cycle_parameters["engine"]
-        machine = cycle_parameters["machine"]
         is_fan = cycle_parameters["fan"]
-        e_c = cycle_parameters["e"]
-        inlet_idx = cycle_parameters["idx_inlet"]
-        exit_idx = cycle_parameters["idx_exit"]
-        M_exit = cycle_parameters["M_exit"]
+        self.e_c = cycle_parameters["e"]
 
-        # Handle Fans
+        # Handle fans and normal compressors
         match is_fan:
             case True:
+                machine = "axial"
                 self.B = cycle_parameters["bypass ratio"]
                 self.rootPR = cycle_parameters["root PR"]
                 self.tipPR = cycle_parameters["tip PR"]
+                Mroot_exit = cycle_parameters["root exit M"]
+                Mtip_exit = cycle_parameters["tip exit M"]
                 self.root_inlet = self.tip_inlet = upstream
                 self.tip_inlet.W = upstream.W * self.B
                 self.root_inlet.W = upstream.W * (1 - self.B)
+                self.root_inlet.idx = "2"
+                self.tip_inlet.idx = "1.2"
+                self.root_exit = self.solve_exit(self.root_inlet, "2.05", PR, 0, 0, Mroot_exit)
+                self.tip_exit = self.solve_exit(self.tip_inlet, "1.3", PR, 0, 0, Mtip_exit)
+                root_delta_ht = self.root_inlet.ht - self.root_exit.ht
+                tip_delta_ht = self.tip_inlet.ht - self.tip_exit.ht
+                self.delta_ht = root_delta_ht + tip_delta_ht
+                self.power = self.root_inlet.W * root_delta_ht + self.tip_inlet.W * tip_delta_ht
             case False:
+                machine = cycle_parameters["machine"]
+                inlet_idx = cycle_parameters["inlet idx"]
+                exit_idx = cycle_parameters["exit idx"]
                 cooling = cycle_parameters["cooling"]
                 packing = cycle_parameters["packing"]
                 PR = cycle_parameters["PR"]
+                M_exit = cycle_parameters["exit M"]
                 self.inlet = upstream
-                self.exit = copy.deepcopy(self.inlet)
-                self.exit.idx = exit_idx
-                self.exit.M = M_exit
                 self.inlet.idx = inlet_idx
-                self.coolant = cooling * self.inlet.W
-                self.exit.W = self.inlet.W - self.coolant
-                self.exit.Pt = self.inlet.Pt * PR
-                self.exit.Tt = self.inlet.Tt * (PR)**((self.inlet.gamma - 1)*e_c / self.inlet.gamma)
-                self.exit.set_statics(self.exit.M)
+                self.exit = self.solve_exit(self.inlet, exit_idx, PR, cooling, packing, M_exit)
                 self.delta_ht =  (self.exit.cp*self.exit.Tt) - (self.inlet.cp*self.inlet.Tt)
                 self.power = self.inlet.W * self.delta_ht
+
+
+        def solve_exit(self, inlet, exit_idx, PR, cooling, packing, M_exit):
+            exit = copy.deepcopy(inlet)
+            exit.idx = exit_idx
+            exit.M = M_exit
+            coolant = cooling * inlet.W
+            exit.W = inlet.W - coolant
+            exit.Pt = inlet.Pt * PR
+            exit.Tt = inlet.Tt * (PR)**((inlet.gamma - 1)*self.e_c / inlet.gamma)
+            exit.set_statics(exit.M)
+            return exit
+
 
         # COMPONENT DESIGN
         if component_parameters != None:
@@ -265,8 +282,8 @@ class Burner:
         # CYCLE ANALYSIS
         self.Ptloss_b = cycle_parameters["total pressure loss"]
         self.eta_b = cycle_parameters["efficiency"]
-        self.exit_idx = cycle_parameters["idx_exit"]
-        self.M_exit = cycle_parameters["M_exit"]
+        self.exit_idx = cycle_parameters["exit idx"]
+        self.M_exit = cycle_parameters["exit M"]
         self.engine = cycle_parameters["engine"]
         self.LHV = self.engine.LHV
         self.solve_exit(upstream)
@@ -317,8 +334,8 @@ class Turbine:
         self.mdot_cool = compressor.coolant
         self.power = abs(compressor.power)
         self.eta_m = cycle_parameters["mechanical efficiency"]
-        self.exit_idx = cycle_parameters["idx_exit"]
-        self.M_exit = cycle_parameters["M_exit"]
+        self.exit_idx = cycle_parameters["exit idx"]
+        self.M_exit = cycle_parameters["exit M"]
         self.solve_exit(upstream)
 
 
@@ -450,6 +467,7 @@ class Mixer:
         # COMPONENT DESIGN
         if component_parameters != None: pass
 
+
 class Afterburner:
     def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
         # CYCLE ANALYSIS
@@ -571,8 +589,8 @@ class Recuperator:
     def __init__(self, cold_inlet:Station, cycle_parameters, component_parameters=None):
         self.cyce_parameters = cycle_parameters
         self.engine = cycle_parameters["engine"]
-        self.Mexit_cold = cycle_parameters["Mexit_cold"]
-        self.Mexit_hot = cycle_parameters["Mexit_hot"]
+        self.Mexit_cold = cycle_parameters["cold exit M"]
+        self.Mexit_hot = cycle_parameters["hot exit M"]
         self.pi_cold = cycle_parameters["pi_cold"]
         self.pi_hot = cycle_parameters["pi_hot"]
         self.delta_ht = cycle_parameters["delta_ht"] * 10**3 # kJ/kg to J/kg
