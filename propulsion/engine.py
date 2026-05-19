@@ -203,7 +203,6 @@ class Inlet:
             W1 = engine.W
 
         freestream_FAR = freestream_Wf = inlet_FAR = inlet_Wf = exit_FAR = exit_Wf = 0
-
         self.freestream = Station(W1, freestream_Wf, freestream.Tt, freestream.Pt, freestream_FAR, M=freestream.Minf, idx=0) # Station 0
         self.inlet = Station(W1, inlet_Wf, freestream.Tt, freestream.Pt, inlet_FAR, M=M_inlet, idx=1) # Station 1
         self.exit = copy.deepcopy(self.inlet)
@@ -211,7 +210,7 @@ class Inlet:
         self.exit.Pt = self.inlet.Pt * Pt_recovery
         self.exit.set_statics(self.exit.M)
 
-        # COMPONENT ANALYSIS
+        # COMPONENT DESIGN
         if component_parameters != None: pass
 
 
@@ -225,12 +224,20 @@ class Compressor:
         inlet_idx = cycle_parameters["idx_inlet"]
         exit_idx = cycle_parameters["idx_exit"]
         M_exit = cycle_parameters["M_exit"]
-        cooling = cycle_parameters["cooling"]
-        packing = cycle_parameters["packing"]
-        PR = cycle_parameters["PR"]
 
+        # Handle Fans
         match is_fan:
+            case True:
+                self.B = cycle_parameters["bypass ratio"]
+                self.rootPR = cycle_parameters["root PR"]
+                self.tipPR = cycle_parameters["tip PR"]
+                self.root_inlet = self.tip_inlet = upstream
+                self.tip_inlet.W = upstream.W * self.B
+                self.root_inlet.W = upstream.W * (1 - self.B)
             case False:
+                cooling = cycle_parameters["cooling"]
+                packing = cycle_parameters["packing"]
+                PR = cycle_parameters["PR"]
                 self.inlet = upstream
                 self.exit = copy.deepcopy(self.inlet)
                 self.exit.idx = exit_idx
@@ -241,11 +248,10 @@ class Compressor:
                 self.exit.Pt = self.inlet.Pt * PR
                 self.exit.Tt = self.inlet.Tt * (PR)**((self.inlet.gamma - 1)*e_c / self.inlet.gamma)
                 self.exit.set_statics(self.exit.M)
-                self.delta_h =  (self.inlet.cp*self.inlet.Tt) - (self.exit.cp*self.exit.Tt)
-                self.power = self.inlet.W * self.delta_h
-            case True: pass
+                self.delta_ht =  (self.exit.cp*self.exit.Tt) - (self.inlet.cp*self.inlet.Tt)
+                self.power = self.inlet.W * self.delta_ht
 
-        # COMPONENT ANALYSIS
+        # COMPONENT DESIGN
         if component_parameters != None:
             match machine:
                 case "axial":
@@ -394,9 +400,10 @@ class Turbine:
 
 
 class Mixer:
-    def __init__(self, hot_inlet:Station, cold_inlet:Station, B): 
-        # Mhot is a design choice that can alternatively be cold_inlet.M
+    def __init__(self, hot_inlet:Station, cold_inlet:Station, B, component_parameters=None): 
+        # CYCLE ANALYSIS
 
+        # Mhot is a design choice that can alternatively be cold_inlet.M
         if B == 0: self.exit = copy.deepcopy(hot_inlet)
         
         # Hot Stream (static properties)
@@ -440,9 +447,12 @@ class Mixer:
         exit_station = Station(exit_W, exit_Wf, exit_Tt, exit_Pt, exit_FAR, idx=exit_idx, M=exit_M)
         exit_station.set_statics(exit_station.M)
 
+        # COMPONENT DESIGN
+        if component_parameters != None: pass
 
 class Afterburner:
     def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
+        # CYCLE ANALYSIS
         engine = cycle_parameters["engine"]
         self.toggle = cycle_parameters["toggle"]
         self.Ttmax = cycle_parameters["AET"]
@@ -451,6 +461,9 @@ class Afterburner:
         self.eta = cycle_parameters["efficiency"]
         self.LHV = engine.LHV
         self.solve_exit(upstream)
+
+        # COMPONENT DESIGN
+        if component_parameters != None: pass
 
 
     def solve_exit(self, upstream):
@@ -713,8 +726,9 @@ class Engine:
         self.inlet = inlet
         self.burner = burner
         self.exhaust = exhaust
-        # Check for a recuperator and afterburner in the user input parameters
+        # Check for a recuperator in the user input parameters
         if "recuperator" in parameters: self.add_recuperator(parameters["recuperator"])
+        # Check for an afterburner in the user input parameters
         if "afterburner" in parameters: self.add_afterburner(parameters["afterburner"])
 
 
@@ -844,25 +858,114 @@ class Engine:
 handles turbofan (mixed/unmixed) and variable bypass ramjet
 '''
 class BypassEngine(Engine):
-    def __init__(self, engine_parameters, size="diameter", parameters=None):
+    def __init__(self, engine_parameters):
         self.spools = engine_parameters["spools"]
-        self.TET = engine_parameters["TET"]
+        self.B = engine_parameters["bypass ratio"]
         self.mixed = engine_parameters["mixed"]
+        self.is_fan = engine_parameters["fan"]
+        self.TET = engine_parameters["TET"]
         self.LHV = engine_parameters["LHV"]
         self.Minf = engine_parameters["Minf"]
         self.altitude = engine_parameters["altitude"]
         self.ambient = Ambient(self.altitude, Minf=self.Minf)
 
+        # Handle user errors in engine parameters
+        if "mdot" in engine_parameters and "diameter" in engine_parameters:
+            raise ValueError("Error. Cannot have two sizing parameters. Must choose either inlet mass flow or fan face diameter.")
+        else:
+            if "mdot" in engine_parameters: self.W = engine_parameters["mdot"] # kg/sec
+            elif "diameter" in engine_parameters: self.front_diameter = engine_parameters["front face diameter"] # inches
+
+
+    def set_components(self, parameters):
+        self.parameters = parameters
+
+        # Include the engine object in each set of component parameters
+        for component_name in parameters:
+            if component_name != "engine":
+                parameters[component_name]["engine"] = self
+
         # Handle different spool counts
         match self.spools:
+            case 1:
+                self.PR = parameters["engine"]["PR"]
+                parameters["compressor"]["PR"] = self.PR
+
+                # Check if the engine is a turbofan
+                if self.is_fan: parameters["compressor"]["fan"] = True
+                else: parameters["compressor"]["fan"] = False
+
+                self.components = [
+                    inlet := Inlet(parameters["intake"]),
+                    compressor := Compressor(inlet.exit, parameters["compressor"]),
+                    burner := Burner(compressor.exit, parameters["burner"]),
+                    turbine := Turbine(burner.exit, compressor, parameters["turbine"]),
+                    exhaust := Nozzle(turbine.exit, parameters["nozzle"])
+                ]
+
+                self.compressor = compressor
+                self.turbine = turbine
             case 2:
-                self.OPR = engine_parameters["OPR"]
-                self.FPR = engine_parameters["FPR"]
-                self.HPR = self.OPR / self.FPR
+                self.OPR = parameters["engine"]["OPR"]
+                self.HPR = parameters["engine"]["HPR"]
+                self.LPR = self.OPR / self.HPR
+                parameters["hpc"]["PR"] = self.HPR
+                parameters["lpc"]["PR"] = self.LPR
+
+                # Check if the engine is a turbofan
+                if self.is_fan: parameters["lpc"]["fan"] = True
+                else: parameters["lpc"]["fan"] = False
+
+                self.components = [
+                    inlet := Inlet(parameters["intake"]),
+                    lpc := Compressor(inlet.exit, parameters["lpc"]),
+                    hpc := Compressor(lpc.exit, parameters["hpc"]),
+                    burner := Burner(hpc.exit, parameters["burner"]),
+                    hpt := Turbine(burner.exit, parameters["hpt"]),
+                    lpt := Turbine(hpt.exit, parameters["lpt"]),
+                    exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                ]
+                self.lpc = lpc
+                self.hpc = hpc
+                self.hpt = hpt
+                self.lpt = lpt
             case 3:
-                self.OPR = engine_parameters["OPR"]
-                self.FPR = engine_parameters["FPR"]
-                self.IPR = engine_parameters["IPR"]
-                self.HPR = self.OPR / self.FPR / self.IPR
+                self.OPR = parameters["engine"]["OPR"]
+                self.HPR = parameters["engine"]["HPR"]
+                self.IPR = parameters["engine"]["IPR"]
+                self.LPR = self.OPR / self.HPR / self.IPR
+                parameters["hpc"]["PR"] = self.HPR
+                parameters["ipc"]["PR"] = self.IPR
+                parameters["lpc"]["PR"] = self.LPR
+
+                # Check if the engine is a turbofan
+                if self.is_fan: parameters["lpc"]["fan"] = True
+                else: parameters["lpc"]["fan"] = False
+
+                self.components = [
+                    inlet := Inlet(parameters["intake"]),
+                    lpc := Compressor(inlet.exit, parameters["lpc"]),
+                    ipc := Compressor(lpc.exit, parameters["hpc"]),
+                    hpc := Compressor(ipc.exit, parameters["hpc"]),
+                    burner := Burner(hpc.exit, parameters["burner"]),
+                    hpt := Turbine(burner.exit, parameters["hpt"]),
+                    ipt := Turbine(hpt.exit, parameters["ipt"]),
+                    lpt := Turbine(ipt.exit, parameters["lpt"]),
+                    exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                ]
+                self.lpc = lpc
+                self.ipc = ipc
+                self.hpc = hpc
+                self.hpt = hpt
+                self.ipt = ipt
+                self.lpt = lpt
             case _:
-                raise ValueError("Number of spools can only be 2 or 3")
+                raise ValueError("Number of spools must be either 1, 2, or 3.")
+
+        self.inlet = inlet
+        self.burner = burner
+        self.exhaust = exhaust
+        # Check for a recuperator in the user input parameters
+        if "recuperator" in parameters: self.add_recuperator(parameters["recuperator"])
+        # Check for an afterburner in the user input parameters
+        if "afterburner" in parameters: self.add_afterburner(parameters["afterburner"])
