@@ -2,59 +2,62 @@
     "parameters":{
         "engine": {
             "spools": 2,
-            "OPR": 10,
+            "OPR": 20,
             "TET": 1510,
-            "FPR": 1.2,
+            "bypass ratio": 2.85,
             "mixed": true,
-            "Minf": 0.8,
-            "altitude": 40000,
-            "front face diameter": 0.53,
+            "fan": true,
+            "Minf": 0.85,
+            "altitude": 12162.97,
+            "fan diameter": 47.7,
             "LHV": 43100000
         },
         "intake": {
             "total pressure recovery": 0.98,
-            "M_inlet": 0.1,
-            "M_exit": 0.3
+            "inlet M": 0.6,
+            "exit M": 0.55
         },
         "lpc": {
             "machine": "axial",
-            "fan": false,
             "e": 0.91,
-            "M_exit": 0.4,
-            "idx_inlet": 2,
-            "idx_exit": 3,
+            "exit M": 0.4,
+            "inlet idx": 2,
+            "exit idx": 3,
             "cooling": 0.0,
-            "packing": 0.0
+            "packing": 0.0,
+            "root PR": 2.1,
+            "tip PR": 2.1,
+            "root exit M": 0.3,
+            "tip exit M": 0.3
         },
         "hpc": {
             "machine": "axial",
-            "fan": false,
             "e": 0.91,
-            "M_exit": 0.4,
-            "idx_inlet": 2,
-            "idx_exit": 3,
+            "exit M": 0.4,
+            "inlet idx": 2,
+            "exit idx": 3,
             "cooling": 0.03,
-            "packing": 0.01
+            "packing": 0
         },
         "burner": {
             "total pressure loss": 0.05,
             "efficiency": 0.99,
-            "M_exit": 0.4,
-            "idx_exit": 4
+            "exit M": 0.4,
+            "exit idx": 4
         },
         "hpt": {
             "machine": "axial",
             "e": 0.95,
             "mechanical efficiency": 0.99,
-            "M_exit": 0.43,
-            "idx_exit": 5
+            "exit M": 0.43,
+            "exit idx": 5
         },
         "lpt": {
             "machine": "axial",
             "e": 0.95,
             "mechanical efficiency": 0.99,
-            "M_exit": 0.5,
-            "idx_exit": 5
+            "exit M": 0.5,
+            "exit idx": 5
         },
         "nozzle": {
             "C/CD": "C",

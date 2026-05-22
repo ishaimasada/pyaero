@@ -18,7 +18,7 @@ with open("bypass_parameters.json", "r") as file:
 from engine import *
 
 engine_parameters = parameters["engine"]
-engine = BypassEngine(engine_parameters, size="diameter")
+engine = BypassEngine(engine_parameters)
 engine.set_components(parameters)
 station_data = engine.get_station_data()
 print(station_data)
