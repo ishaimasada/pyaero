@@ -60,15 +60,18 @@ class Station:
         self.Tt = Tt
         self.Pt = Pt
         self.Wc = self.get_Wc(self.W, self.Tt, self.Pt)
-        self.Wf = 0
-        self.Wa = self.W - self.Wf
-        self.FAR = FAR
-        self.ht = self.get_ht(self.Tt, self.FAR)
         self.M = M
         self.idx = idx
 
-        if self.M != None: self.set_statics(self.M)
-        if self.FAR != None: self.FAR = self.get_FAR()
+        if FAR != None: 
+            self.FAR = FAR
+            self.Wa = self.W / (1 + FAR)
+            self.Wf = FAR * self.Wa
+        else:
+            self.FAR = self.Wf = 0
+        if self.M != None: 
+            self.set_statics(self.M)
+        self.ht = self.get_ht(self.Tt, self.FAR)
 
     def __str__(self):
         return f"Station {self.idx}\nW = {self.W}\nWc = {self.Wc}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt/1000}\nM = {self.M}"
@@ -169,10 +172,8 @@ class Station:
         while error > 0.001:
             Tmid = (Thi + Tlo) / 2
             hmid = self.get_ht(Tmid, FAR)
-            
             if hmid < h: Tlo = Tmid
             elif hmid > h: Thi = Tmid
-            
             iterations += 1
             T = Tmid
             error = abs(hmid - h) / h
@@ -210,9 +211,11 @@ class Inlet:
         self.inlet = Station(W1, Wf, freestream.Tt, freestream.Pt, FAR, M=M_inlet, idx=1) # Station 1
         
         # Check if it's a BypassEngine
-        if isinstance(engine, BypassEngine) and engine.is_fan == False:
-            self.bypass_exit = Station(W1*engine.B, Wf, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=1.3)
-            self.root_exit = Station(W1*(1-engine.B), Wf, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=2)
+        if isinstance(engine, BypassEngine):
+            bypass_W = W1*engine.B / (engine.B+1)
+            root_W = W1 - bypass_W
+            self.bypass_exit = Station(bypass_W, Wf, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=1.2)
+            self.root_exit = Station(root_W, Wf, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=2)
         else:
             self.exit = Station(W1, Wf, freestream.Tt, freestream.Pt*Pt_recovery, FAR, M=M_exit, idx=2) # Station 1
 
@@ -221,7 +224,7 @@ class Inlet:
 
 
 class Compressor:
-    def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
+    def __init__(self, upstream:Station, cycle_parameters, component_parameters=None, root_upstream=None):
         # CYCLE ANALYSIS
         engine = cycle_parameters["engine"]
         self.e_c = cycle_parameters["e"]
@@ -229,6 +232,7 @@ class Compressor:
         # Handle fans and normal compressors
         if "fan" in cycle_parameters:
             machine = "axial"
+            self.is_fan = True
             self.cooling = 0
             self.packing = 0
             self.B = engine.B
@@ -236,10 +240,8 @@ class Compressor:
             self.tipPR = cycle_parameters["tip PR"]
             Mroot_exit = cycle_parameters["root exit M"]
             Mtip_exit = cycle_parameters["tip exit M"]
-            self.root_inlet = copy.deepcopy(upstream)
+            self.root_inlet = copy.deepcopy(root_upstream)
             self.tip_inlet = copy.deepcopy(upstream)
-            self.tip_inlet.W = upstream.W * self.B / (self.B + 1)
-            self.root_inlet.W = upstream.W - self.tip_inlet.W
             self.root_inlet.idx = "2"
             self.tip_inlet.idx = "1.2"
             self.root_exit = self.solve_exit(self.root_inlet, "2.05", self.rootPR, 0, 0, Mroot_exit)
@@ -247,10 +249,7 @@ class Compressor:
             root_delta_ht = self.root_inlet.ht - self.root_exit.ht
             tip_delta_ht = self.tip_inlet.ht - self.tip_exit.ht
             self.delta_ht = root_delta_ht + tip_delta_ht
-            self.power = self.root_inlet.W * root_delta_ht + self.tip_inlet.W * tip_delta_ht
-
-            #print(self.root_exit.W)
-            #print(self.tip_exit.W)
+            self.power = (self.root_inlet.W*root_delta_ht) + (self.tip_inlet.W*tip_delta_ht)
         else:
             machine = cycle_parameters["machine"]
             inlet_idx = cycle_parameters["inlet idx"]
@@ -280,7 +279,7 @@ class Compressor:
         exit.M = M_exit
         exit.W = inlet.W * (1 - cooling - packing)
         exit.Pt = inlet.Pt * PR
-        exit.Tt = inlet.Tt * (PR)**((inlet.gamma - 1)*self.e_c / inlet.gamma)
+        exit.Tt = inlet.Tt * (PR)**((inlet.gamma - 1) / (inlet.gamma*self.e_c))
         exit.set_statics(exit.M)
         return exit
 
@@ -468,7 +467,9 @@ class Mixer:
         T = Tt * (1 + (gamma - 1)/2 * M**2)**(-1)
         P = (W*numpy.sqrt(R*T)/(A*M*numpy.sqrt(gamma)))
         Pt = P * (Tt/T)**(gamma / (gamma - 1))
-        self.exit = Station(W, Wf, Tt, Pt, FAR, idx=idx, M=M)
+        print(FAR)
+        self.exit = Station(W, Wf, Tt, Pt, FAR=FAR, idx=idx, M=M)
+        print(self.exit.FAR)
 
         # COMPONENT DESIGN
         if component_parameters != None: pass
@@ -837,7 +838,7 @@ class Engine:
         performance = pandas.DataFrame({
                                          "Specific Thrust [m/sec]": T_ma,
                                          "TSFC [g/(sec*kN)]": TSFC,
-                                         "Thrust [kN]": thrust,
+                                         "Thrust [kN]": thrust/1000,
                                          "Propulsive Efficiency": eta_p,
                                          "Thermal Efficiency": eta_th,
                                          "Overall Efficiency": eta_o
@@ -923,7 +924,7 @@ class BypassEngine(Engine):
                     compressor := Compressor(inlet.root_exit, parameters["compressor"]),
                     burner := Burner(compressor.exit, parameters["burner"]),
                     turbine := Turbine(burner.exit, compressor, parameters["turbine"]),
-                    mixer := Mixer(inlet.bypass_exit, turbine.exit),
+                    mixer := Mixer(turbine.exit, inlet.bypass_exit),
                     exhaust := Nozzle(mixer.exit, parameters["nozzle"])
                 ]
                 self.compressor = compressor
@@ -942,25 +943,25 @@ class BypassEngine(Engine):
                         case True: 
                             self.components = [
                                 inlet := Inlet(parameters["intake"]),
-                                lpc := Compressor(inlet.exit, parameters["lpc"]),
+                                lpc := Compressor(inlet.bypass_exit, parameters["lpc"], root_upstream=inlet.root_exit),
                                 hpc := Compressor(lpc.root_exit, parameters["hpc"]),
                                 burner := Burner(hpc.exit, parameters["burner"]),
                                 hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
                                 lpt := Turbine(hpt.exit, lpc, parameters["lpt"]),
-                                mixer := Mixer(lpc.tip_exit, lpt.exit),
-                                exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                                mixer := Mixer(lpt.exit, lpc.tip_exit),
+                                exhaust := Nozzle(mixer.exit, parameters["nozzle"])
                             ]
                             self.mixer = mixer
                         case False: 
                             self.components = [
                                 inlet := Inlet(parameters["intake"]),
-                                lpc := Compressor(inlet.exit, parameters["lpc"]),
+                                lpc := Compressor(inlet.bypass_exit, parameters["lpc"], root_upstream=inlet.root_exit),
                                 cold_nozzle := Nozzle(lpc.tip_exit, parameters["cold nozzle"]),
                                 hpc := Compressor(lpc.exit, parameters["hpc"]),
                                 burner := Burner(hpc.exit, parameters["burner"]),
                                 hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
                                 lpt := Turbine(hpt.exit, lpc, parameters["lpt"]),
-                                exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                                exhaust := Nozzle(lpt.exit, parameters["nozzle"])
                             ]
                             self.cold_nozzle = cold_nozzle
                 else: 
@@ -981,8 +982,8 @@ class BypassEngine(Engine):
                         burner := Burner(hpc.exit, parameters["burner"]),
                         hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
                         lpt := Turbine(hpt.exit, lpc, parameters["lpt"]),
-                        mixer := Mixer(inlet.bypass_exit, lpt.exit),
-                        exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                        mixer := Mixer(lpt.exit, inlet.bypass_exit),
+                        exhaust := Nozzle(mixer.exit, parameters["nozzle"])
                     ]
                     self.mixer = mixer
                 self.lpc = lpc
@@ -1011,8 +1012,8 @@ class BypassEngine(Engine):
                                 hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
                                 ipt := Turbine(hpt.exit, ipc, parameters["ipt"]),
                                 lpt := Turbine(ipt.exit, lpc, parameters["lpt"]),
-                                mixer := Mixer(lpc.tip_exit, lpt.exit),
-                                exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                                mixer := Mixer(lpt.exit, lpc.tip_exit),
+                                exhaust := Nozzle(mixer.exit, parameters["nozzle"])
                             ]
                             self.mixer = mixer
                         case False:
@@ -1026,7 +1027,7 @@ class BypassEngine(Engine):
                                 hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
                                 ipt := Turbine(hpt.exit, ipc, parameters["ipt"]),
                                 lpt := Turbine(ipt.exit, lpc, parameters["lpt"]),
-                                exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                                exhaust := Nozzle(lpt.exit, parameters["nozzle"])
                             ]
                             self.cold_nozzle = cold_nozzle
                 else:
@@ -1049,8 +1050,8 @@ class BypassEngine(Engine):
                         hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
                         ipt := Turbine(hpt.exit, ipc, parameters["ipt"]),
                         lpt := Turbine(ipt.exit, lpc, parameters["lpt"]),
-                        mixer := Mixer(inlet.bypass_exit, lpt.exit),
-                        exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                        mixer := Mixer(lpt.exit, inlet.bypass_exit),
+                        exhaust := Nozzle(mixer.exit, parameters["nozzle"])
                     ]
                     self.mixer = mixer
                 self.lpc = lpc
@@ -1065,39 +1066,29 @@ class BypassEngine(Engine):
         self.inlet = inlet
         self.burner = burner
         self.exhaust = exhaust
-        # Check for a recuperator in the user input parameters
-        if "recuperator" in parameters: self.add_recuperator(parameters["recuperator"])
         # Check for an afterburner in the user input parameters
         if "afterburner" in parameters: self.add_afterburner(parameters["afterburner"])
 
     # Retrieve flow properties at every station
     def get_station_data(self): 
         raw_data = list()
-        # Handle Recuperator station data (afterburner is treated like the other components)
-        if "recuperator" in self.parameters:
-            for component in self.components:
-                if isinstance(component, Inlet):
-                    raw_data.append(component.freestream.get_properties())
-                    raw_data.append(component.inlet.get_properties())
-                    raw_data.append(component.exit.get_properties())
-                elif isinstance(component, Recuperator):
-                    raw_data.append(component.cold_exit.get_properties())
-                elif isinstance(component, Turbine):
-                    raw_data.append(component.exit.get_properties())
-                    raw_data.append(self.recuperator.pass_hot_stream(component.exit).get_properties())
+        
+        for component in self.components:
+            if isinstance(component, Inlet):
+                raw_data.append(component.freestream.get_properties())
+                raw_data.append(component.inlet.get_properties())
+                raw_data.append(component.bypass_exit.get_properties())
+                raw_data.append(component.root_exit.get_properties())
+            elif isinstance(component, Compressor):
+                if hasattr(component, "is_fan"):
+                    raw_data.append(component.root_exit.get_properties())
+                    raw_data.insert(-2, component.tip_exit.get_properties())
                 else:
                     raw_data.append(component.exit.get_properties())
-        else:
-            for component in self.components:
-                if isinstance(component, Inlet):
-                    raw_data.append(component.freestream.get_properties())
-                    raw_data.append(component.inlet.get_properties())
-                    raw_data.append(component.exit.get_properties())
-                elif isinstance(component, Compressor):
-                    pass
-                else:
-                    raw_data.append(component.exit.get_properties())
+            else:
+                raw_data.append(component.exit.get_properties())
                     
         rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
         station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
         return station_data
+
