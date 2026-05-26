@@ -20,7 +20,13 @@ from engine import *
 engine_parameters = parameters["engine"]
 engine = BypassEngine(engine_parameters)
 engine.set_components(parameters)
-station_data = engine.get_station_data()
-print(station_data)
-#engine.plot_thermo()
-engine.display_performance()
+station_data, performance = engine.get_performance()
+
+# Change the current working directory to the file location
+filepath = os.path.abspath(__file__)
+directory = os.path.dirname(filepath)
+os.chdir(directory)
+
+station_data.to_excel("station_data.xlsx", index=False)
+print(performance)
+engine.plot_thermo()

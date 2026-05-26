@@ -68,7 +68,8 @@ class Station:
             self.Wa = self.W / (1 + FAR)
             self.Wf = FAR * self.Wa
         else:
-            self.FAR = self.Wf = 0
+            self.FAR = 0
+            self.Wf = 0
         if self.M != None: 
             self.set_statics(self.M)
         self.ht = self.get_ht(self.Tt, self.FAR)
@@ -246,8 +247,8 @@ class Compressor:
             self.tip_inlet.idx = "1.2"
             self.root_exit = self.solve_exit(self.root_inlet, "2.05", self.rootPR, 0, 0, Mroot_exit)
             self.tip_exit = self.solve_exit(self.tip_inlet, "1.3", self.tipPR, 0, 0, Mtip_exit)
-            root_delta_ht = self.root_inlet.ht - self.root_exit.ht
-            tip_delta_ht = self.tip_inlet.ht - self.tip_exit.ht
+            root_delta_ht = self.root_exit.ht - self.root_inlet.ht
+            tip_delta_ht = self.tip_exit.ht - self.tip_inlet.ht
             self.delta_ht = root_delta_ht + tip_delta_ht
             self.power = (self.root_inlet.W*root_delta_ht) + (self.tip_inlet.W*tip_delta_ht)
         else:
@@ -467,9 +468,7 @@ class Mixer:
         T = Tt * (1 + (gamma - 1)/2 * M**2)**(-1)
         P = (W*numpy.sqrt(R*T)/(A*M*numpy.sqrt(gamma)))
         Pt = P * (Tt/T)**(gamma / (gamma - 1))
-        print(FAR)
         self.exit = Station(W, Wf, Tt, Pt, FAR=FAR, idx=idx, M=M)
-        print(self.exit.FAR)
 
         # COMPONENT DESIGN
         if component_parameters != None: pass
@@ -713,7 +712,7 @@ class Engine:
                     burner := Burner(hpc.exit, parameters["burner"]),
                     hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
                     lpt := Turbine(hpt.exit, lpc, parameters["lpt"]),
-                    exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                    exhaust := Nozzle(lpt.exit, parameters["nozzle"])
                 ]
                 self.lpc = lpc
                 self.hpc = hpc
@@ -737,7 +736,7 @@ class Engine:
                     hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
                     ipt := Turbine(hpt.exit, ipc, parameters["ipt"]),
                     lpt := Turbine(ipt.exit, lpc, parameters["lpt"]),
-                    exhaust := Nozzle(hpt.exit, parameters["nozzle"])
+                    exhaust := Nozzle(lpt.exit, parameters["nozzle"])
                 ]
                 self.lpc = lpc
                 self.ipc = ipc
@@ -817,24 +816,35 @@ class Engine:
                     
         rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
         station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
+        
         return station_data
 
 
     # Display the full engine performance
-    def display_performance(self):
+    def get_performance(self):
         """ Performance Parameters """
         station_data = self.get_station_data()
         W = station_data["W [kg/sec]"].values
         V = station_data["V [m/sec]"].values
+        P = station_data["Ps [kPa]"].values
+        A = station_data["Area [m^2]"].values
         FAR = station_data["FAR"].values
-        FAR_Qin = self.burner.exit.FAR
+        Wf_in = self.burner.exit.Wf
         FARexit = self.exhaust.exit.FAR
-        T_ma = V[-1]*(1 + FAR[-1]) - V[0] # Specific Thrust
-        TSFC = (FAR[-1] / T_ma) * 10**6 # Thrust Specific Fuel Consumption (TSFC)
-        thrust = T_ma * W[0] # Thrust
-        eta_p = 2*thrust*V[0] / (W[-1]*V[-1]**2 - W[0]*V[0]**2) # Propulsive Efficiency
-        eta_th = (((1 + FARexit)*V[-1]**2) - V[0]**2) / (FAR_Qin*self.LHV) # Thermal Efficiency
-        eta_o = eta_p * eta_th # Overall Efficiency
+        pressure_thrust = A[-1] * ((P[-1]*1000) - self.ambient.P)
+        pressure_power = pressure_thrust * V[-1]
+        # Specific Thrust
+        T_ma = V[-1]*(1 + FAR[-1]) - V[0] + pressure_thrust/W[0] 
+        # Thrust Specific Fuel Consumption (TSFC)
+        TSFC = (FAR[-1] / T_ma) * 10**6 
+        # Thrust
+        thrust = T_ma * W[0] 
+        # Propulsive Efficiency
+        eta_p = thrust*V[0] / (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) 
+        # Thermal Efficiency
+        eta_th = (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) / (Wf_in*self.LHV) 
+        # Overall Efficiency
+        eta_o = eta_p * eta_th 
         performance = pandas.DataFrame({
                                          "Specific Thrust [m/sec]": T_ma,
                                          "TSFC [g/(sec*kN)]": TSFC,
@@ -843,7 +853,7 @@ class Engine:
                                          "Thermal Efficiency": eta_th,
                                          "Overall Efficiency": eta_o
                                         }, index=[0])
-        print(performance)
+        return station_data, performance
 
 
     # Plot the temperatures and pressures throughout the whole engine
