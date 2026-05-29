@@ -16,7 +16,6 @@
         },
         "compressor": {
             "machine": "axial",
-            "fan": false,
             "e": 0.91,
             "exit M": 0.4,
             "inlet idx": 2,
@@ -24,17 +23,17 @@
             "cooling": 0.0,
             "packing": 0.0
         },
+        "recuperator": {
+            "pi_hot": 0.94,
+            "pi_cold": 0.94,
+            "delta_ht": 400,
+            "cold exit M": 0.2,
+            "hot exit M": 0.3
+        },
         "burner": {
             "total pressure loss": 0.05,
             "efficiency": 0.99,
             "exit M": 0.4
-        },
-        "turbine": {
-            "machine": "axial",
-            "e": 0.95,
-            "mechanical efficiency": 0.99,
-            "exit M": 0.43,
-            "exit idx": 5
         },
         "afterburner": {
             "toggle": true,
@@ -45,6 +44,13 @@
             "delta_ht": 400, 
             "cold exit M": 0.2, 
             "hot exit M": 0.3
+        },
+        "turbine": {
+            "machine": "axial",
+            "e": 0.95,
+            "mechanical efficiency": 0.99,
+            "exit M": 0.43,
+            "exit idx": 5
         },
         "nozzle": {
             "C/CD": "C",

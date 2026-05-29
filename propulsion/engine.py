@@ -55,7 +55,7 @@ class Station:
                     "Area [m^2]"
                    ]
 
-    def __init__(self, W, Wf, Tt, Pt, FAR=None, M=None, idx=None):
+    def __init__(self, W, Tt, Pt, FAR=None, M=None, idx=None):
         self.W = W
         self.Tt = Tt
         self.Pt = Pt
@@ -186,6 +186,29 @@ class Station:
         return station_data
 
 
+# Stations for axial turbomachines (contains radii and velocity triangles)
+class TurboStation(Station):
+    def __init__(self, W, Tt, Pt, idx, FAR=None, M=None, rm=None, rh=None, rt=None):
+        super().__init__(W, Tt, Pt, FAR, M, idx)
+        self.rm = rm
+        self.rh = rh
+        self.rt = rt
+        self.hub_triangle = VelocityTriangle()
+        self.mid_triangle = VelocityTriangle()
+        self.tip_triangle = VelocityTriangle()
+
+# Velocity Triangle for axial turbomachines
+class VelocityTriangle:
+    def __init__(self, Vax=None, Wu=None, U=None):
+        self.Vax = Vax
+        self.U = U
+        self.Vu = None
+        self.V = None
+
+    def plot_triangle(self):
+        pass
+
+
 class Inlet:
     def __init__(self, cycle_parameters, component_parameters=None):
         # CYCLE ANALYSIS
@@ -207,18 +230,18 @@ class Inlet:
         elif hasattr(engine, "W"):
             W1 = engine.W
 
-        FAR = Wf = 0
-        self.freestream = Station(W1, Wf, freestream.Tt, freestream.Pt, FAR, M=freestream.Minf, idx=0) # Station 0
-        self.inlet = Station(W1, Wf, freestream.Tt, freestream.Pt, FAR, M=M_inlet, idx=1) # Station 1
+        FAR = 0
+        self.freestream = Station(W1, freestream.Tt, freestream.Pt, FAR, M=freestream.Minf, idx=0) # Station 0
+        self.inlet = Station(W1, freestream.Tt, freestream.Pt, FAR, M=M_inlet, idx=1) # Station 1
         
         # Check if it's a BypassEngine
         if isinstance(engine, BypassEngine):
             bypass_W = W1*engine.B / (engine.B+1)
             root_W = W1 - bypass_W
-            self.bypass_exit = Station(bypass_W, Wf, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=1.2)
-            self.root_exit = Station(root_W, Wf, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=2)
+            self.bypass_exit = Station(bypass_W, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=1.2)
+            self.root_exit = Station(root_W, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=2)
         else:
-            self.exit = Station(W1, Wf, freestream.Tt, freestream.Pt*Pt_recovery, FAR, M=M_exit, idx=2) # Station 1
+            self.exit = Station(W1, freestream.Tt, freestream.Pt*Pt_recovery, FAR, M=M_exit, idx=2) # Station 1
 
         # COMPONENT DESIGN
         if component_parameters != None: pass
@@ -285,18 +308,15 @@ class Compressor:
         return exit
 
 
-
 class Burner:
     def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
         # CYCLE ANALYSIS
         self.Ptloss_b = cycle_parameters["total pressure loss"]
         self.eta_b = cycle_parameters["efficiency"]
-        self.exit_idx = cycle_parameters["exit idx"]
         self.M_exit = cycle_parameters["exit M"]
         self.engine = cycle_parameters["engine"]
         self.LHV = self.engine.LHV
         self.solve_exit(upstream)
-
         # COMPONENT DESIGN
         if component_parameters != None: pass
     
@@ -305,7 +325,6 @@ class Burner:
         self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = 4
         self.exit.M = self.M_exit
-
         if hasattr(self.engine, "TET"):
             TET = self.engine.TET
             FAR = self.get_FAR(TET, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta_b)
@@ -314,12 +333,10 @@ class Burner:
             self.exit.Wf = self.engine.Wf
             FAR = self.exit.Wf / upstream.W
             TET = bisection(self.get_FAR, FAR, 1800, 100, self.inlet.Tt, 0, self.LHV, self.eta_b)
-
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
         self.exit.Pt = self.inlet.Pt * (1 - self.Ptloss_b)
         self.exit.Tt = TET
         self.exit.set_statics(self.exit.M)
-
 
     def get_FAR(self, T2, T1, FAR1, LHV, eta):
         FARnew = 0.02
@@ -336,35 +353,55 @@ class Burner:
         
 
 class Turbine:
-    def __init__(self, upstream, compressor, cycle_parameters, component_parameters=None):
-        # CYCLE ANALYSIS
-        machine = cycle_parameters["machine"]
-        self.engine = cycle_parameters["engine"]
-        self.compressor = compressor
-        self.e_t = cycle_parameters["e"]
-        self.mdot_cool = self.compressor.cooling
-        self.power = abs(self.compressor.power)
-        self.eta_m = cycle_parameters["mechanical efficiency"]
-        self.exit_idx = cycle_parameters["exit idx"]
-        self.M_exit = cycle_parameters["exit M"]
-        self.solve_exit(upstream)
-
-        # COMPONENT DESIGN
-        if component_parameters != None:
-            match machine:
+    def __init__(self, upstream, compressor, cycle_parameters=None, component_parameters=None):
+        if cycle_parameters != None:
+            # CYCLE ANALYSIS
+            machine = cycle_parameters["machine"]
+            self.engine = cycle_parameters["engine"]
+            self.compressor = compressor
+            self.e_t = cycle_parameters["e"]
+            self.mdot_cool = self.compressor.cooling
+            self.power = abs(self.compressor.power)
+            self.eta_m = cycle_parameters["mechanical efficiency"]
+            self.exit_idx = cycle_parameters["exit idx"]
+            self.M_exit = cycle_parameters["exit M"]
+            self.cycle_parameters = cycle_parameters
+            self.solve_exit(upstream)
+        elif component_parameters != None:
+            # COMPONENT DESIGN
+            machine = component_parameters["machine"]
+            if machine != "turbine": raise ValueError("Parameters must be for a turbine!")
+            flow = component_parameters["flow type"]
+            self.component_parameters = component_parameters
+            self.specification = self.component_parameters["specification"]
+            self.ER = self.specification["ER"]
+            self.power = self.specification["power"]
+            self.rpm = self.specification["rpm"]
+            self.stages = []
+            match flow:
                 case "axial":
-                    self.phi = component_parameters["load coefficient"]
-                    self.psi = component_parameters["work coefficient"]
-                    self.R = component_parameters["radius"]
-                    self.rpm = component_parameters["rpm"]
-                    self.Vum3 = component_parameters["tangential velocity at mid radius station 3"]
-                    self.Rm3 = component_parameters["mid radius at station 3"]
-                    self.AR = component_parameters[" aspect ratio"]
-                    self.Vax3 = component_parameters["axial velocity"]
-                    omega = self.rpm * (2*numpy.pi / 60)
-                case "radial":
-                    pass
+                    for parameters in self.component_parameters["stages"]:
+                        # Handle the upstream station of each stage
+                        idx = parameters["idx"]
+                        if idx == 1:
+                            # First Stage
+                            W = self.specification["W"]
+                            Wc = self.specification["ER"]
+                            Tt = self.specification["Tt"]
+                            Pt = self.specification["Pt"]
+                            R = self.specification["R"]
+                            gamma = self.specification["gamma"]
+                            Cp = self.specification["Cp"]
+                            FAR = self.specification["FAR"]
+                            upstream = Station(W, Tt, Pt, FAR=FAR)
+                            parameters["upstream"] = upstream
+                        else:
+                            # Subsequent stages
+                            parameters["upstream"] = self.stages[idx - 1].upstream
+                        self.stages.append(Stage(machine, flow, parameters))
+                case "radial": pass
 
+    # Cycle Analysis Function
     def solve_exit(self, upstream):
         self.inlet = upstream
         self.exit = copy.deepcopy(self.inlet)
@@ -380,37 +417,52 @@ class Turbine:
         self.exit.set_statics(self.exit.M)
 
 
-    def solve_axial_stage(self, R: list, omega, Vax, Vu_mid, Rm3):
-        # Aerodynamics
-        U = omega * numpy.array(R)
-        Vu = Vu_mid * (R / Rm3) # Free vortex assumption
-        Wu = Vu - U
-        V = numpy.sqrt(Vax**2 + Vu**2)
-        W = numpy.sqrt(Vax**2 + Wu**2)
-        alpha = numpy.atan(Vu / Vax)
-        beta = numpy.atan(Wu / Vax)
-        reaction = (W[2]**2 - W[1]**2) / (V[2]**2 - V[1]**2 + W[2]**2 - W[1]**2)
+# General stage object to be used within all turbomachines (handles stage calculations, not be used outside of component classes)
+class Stage:
+    def __init__(self, machine, flow, parameters):
+        match machine:
+            case "turbine":
+                match flow: 
+                    case "axial":
+                        # AXIAL TURBINE
+                        # Load in stage parameters
+                        self.aerodynamics = parameters["aerodynamics"]
+                        self.geometry = parameters["geometry"]
+                        self.cooling = parameters["cooling"]
+                        self.upstream = parameters["upstream"]
+                        self.phi = self.aerodynamics["load coefficient"]
+                        self.psi = self.aerodynamics["work coefficient"]
+                        self.loss = self.aerodynamics["loss coefficient"]
+                        self.M2m = self.aerodynamics["M2m"]
+                        self.U3m = self.aerodynamics["U2m"]
+                        self.Vu1m = self.aerodynamics["Vu1m"]
+                        self.Rm2_Rm1 = self.geometry["rm climb rate stator"]
+                        self.Rm3_Rm2 = self.geometry["rm climb rate rotor"]
+                        self.Vax2_Vax1 = self.geometry["Vax climb stator"]
+                        self.Vax3_Vax2 = self.geometry["Vax climb rotor"]
+                        self.AR_stator = self.geometry["AR stator"]
+                        self.AR_rotor = self.geometry["AR rotor"]
+                        self.zweiffel = self.geometry["Zweiffel"]
+                        self.omega = self.rpm * (2*numpy.pi / 60)
 
-        # Thermodynamic Properties
-        delta_ht = self.psi * U[2]**2
-        Tt1 = Tt2 = self.upstream.Tt
-        Tt3 = self.upstream.T_from_H(ht[2], self.upstream.FAR, self.upstream.Tt, 100)
-        ER = (self.exit_Tt  / self.upstream.Tt)**(-self.upstream.gamma / ((self.upstream.gamma - 1)*e_tt))
-        Pt1 = Pt2 = self.upstream.Pt
-        Pt3 = Pt2 / ER
-        mdot = numpy.array([self.upstream.W, self.upstream.W, self.upstream.W + self.mdot_cool])
-        Tt = numpy.array([Tt1, Tt2, Tt3])
-        Pt = numpy.array([Pt1, Pt2, Pt3])
-        mdot_corrected = numpy.vectorize(self.upstream.get_Wc)(mdot, Tt, Pt)
-        ht = numpy.array([self.upstream.ht, self.upstream.ht, self.upstream.ht - delta_ht])
-        T = ht - V**2 / self.upstream.cp
-        P = Pt * (T / Tt)**(self.upstream.gamma / ((self.upstream.gamma - 1)*self.e_tt))
-        rho = P / (self.upstream.R * T)
-        a = numpy.sqrt(self.upstream.R * self.upstream.gamma * T)
-        M_absolute = V / a
-        M_relative = W / a
+                        W = self.upstream.W
+                        Tt = self.upstream.Tt
+                        Pt = self.upstream.Pt
+                        W = self.upstream.W
+                        self.stations = [TurboStation()]
+                    case "radial": 
+                        # RADIAL TURBINE
+                        pass
+            case "compressor":
+                match flow:
+                    case "axial":
+                        # AXIAL COMPRESSOR
+                        pass
+                    case "radial": 
+                        # RADIAL COMPRESSOR
+                        pass
 
-    def axial_blade_geometry(self):
+    def solve_geometry(self):
         pass
         '''
         sections = solve_section()
@@ -425,6 +477,55 @@ class Turbine:
         taper_ratio = 
         '''
 
+    def solve_cooling(self):
+        pass
+
+    def display_stage_results(self, Flags):
+        # Display Velocity Triangles
+        if Flags["plot triangles"]:
+            pass
+            '''
+            plot_triangles(stage.stations(1).Hub, stage.stations(1).Vax, 'Stator LE - Hub')
+            plot_triangles(stage.stations(2).Hub, stage.stations(2).Vax, 'Stator TE / Rotor LE - Hub')
+            plot_triangles(stage.stations(3).Hub, stage.stations(3).Vax, 'Rotor TE - Hub')
+            plot_triangles(stage.stations(1).Mid, stage.stations(1).Vax, 'Stator LE - Mid')
+            plot_triangles(stage.stations(2).Mid, stage.stations(2).Vax, 'Stator TE / Rotor LE - Mid')
+            plot_triangles(stage.stations(3).Mid, stage.stations(3).Vax, 'Rotor TE - Mid')
+            plot_triangles(stage.stations(1).Tip, stage.stations(1).Vax, 'Stator LE - Tip')
+            plot_triangles(stage.stations(2).Tip, stage.stations(2).Vax, 'Stator TE / Rotor LE - Tip')
+            plot_triangles(stage.stations(3).Tip, stage.stations(3).Vax, 'Rotor TE - Tip')
+            '''
+        # Display Meridional View
+        if Flags["plot meridional"]:
+            pass
+            #plot_meridional_view(stage)
+        # Display Blade Sections (and Export as CSV Files)
+        if Flags["plot sections"]:
+            pass
+            '''
+            export_section_coordinates(stage, 'Rotor', 'HPT_Rotor')
+            export_section_coordinates(stage, 'Stator', 'HPT_Stator')
+            '''
+        # Display Velocity Tables
+        if Flags["display velocities"]:
+            pass
+            '''
+            display_velocity_table(stage, 'Hub')
+            display_velocity_table(stage, 'Mid')
+            display_velocity_table(stage, 'Tip')
+            '''
+        # Display Thermodynamics Table
+        if Flags["display thermodynamics"]:
+            pass
+            #display_thermo_table(stage)
+        # Display Geometry Table
+        if Flags["display geometry"]:
+            pass
+            #display_geometry_table(stage)
+        # Display Performance
+        if Flags["display performance"]:
+            pass
+            #display_performance(stage, parameters.Specification)
 
 class Mixer:
     def __init__(self, hot_inlet:Station, cold_inlet:Station, component_parameters=None): 
@@ -695,7 +796,20 @@ class Engine:
                     turbine := Turbine(burner.exit, compressor, parameters["turbine"]),
                     exhaust := Nozzle(turbine.exit, parameters["nozzle"])
                 ]
-
+                '''
+                self.components = [inlet := Inlet(parameters["intake"])]
+                parameters["compressor"]["upstream"] = inlet.exit
+                parameters["burner"]["upstream"] = compressor.exit
+                parameters["turbine"]["upstream"] = burner.exit
+                parameters["turbine"]["compressor"] = compressor
+                parameters["nozzle"]["upstream"] = turbine.exit
+                self.components.append(compressor := Compressor(parameters["compressor"]))
+                self.components.append(burner := Burner(parameters["burner"]))
+                self.components.append(turbine := Turbine(parameters["turbine"]))
+                self.components.append(exhaust := Nozzle(turbine.exit, parameters["nozzle"]))
+                self.compressor = compressor
+                self.turbine = turbine
+                '''
                 self.compressor = compressor
                 self.turbine = turbine
             case 2:

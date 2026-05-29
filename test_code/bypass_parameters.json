@@ -40,8 +40,7 @@
         "burner": {
             "total pressure loss": 0.05,
             "efficiency": 0.99,
-            "exit M": 0.4,
-            "exit idx": 4
+            "exit M": 0.5
         },
         "hpt": {
             "machine": "axial",

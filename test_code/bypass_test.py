@@ -14,6 +14,8 @@ os.chdir(directory)
 with open("bypass_parameters.json", "r") as file:
     parameters = json.load(file)["parameters"]
 
+sys.path.append(r"../propulsion")
+
 # Import all types from engine module
 from engine import *
 
