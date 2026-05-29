@@ -569,7 +569,7 @@ class Mixer:
         T = Tt * (1 + (gamma - 1)/2 * M**2)**(-1)
         P = (W*numpy.sqrt(R*T)/(A*M*numpy.sqrt(gamma)))
         Pt = P * (Tt/T)**(gamma / (gamma - 1))
-        self.exit = Station(W, Wf, Tt, Pt, FAR=FAR, idx=idx, M=M)
+        self.exit = Station(W, Tt, Pt, FAR=FAR, idx=idx, M=M)
 
         # COMPONENT DESIGN
         if component_parameters != None: pass

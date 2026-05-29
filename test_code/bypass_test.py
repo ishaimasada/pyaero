@@ -30,5 +30,6 @@ directory = os.path.dirname(filepath)
 os.chdir(directory)
 
 station_data.to_excel("station_data.xlsx", index=False)
+print(station_data)
 print(performance)
 engine.plot_thermo()
