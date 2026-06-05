@@ -1,6 +1,7 @@
 {
     "machine": "turbine",
     "flow": "axial",
+    "number of radii": 3,
     "specification": {
             "ER": 2.459639,
             "power": 22.2376,
@@ -38,8 +39,8 @@
             "cooling": {
                 "OTDF": 0.25, 
                 "CDT": 615.26, 
-                "Metal TtMax": 1400,
-                "Cp coolant": 1054.22,
+                "metal TtMax": 1400,
+                "cp coolant": 1054.22,
                 "RTDF": 1.05,
                 "cooling efficiency": 0.7
             }
