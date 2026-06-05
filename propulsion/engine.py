@@ -706,6 +706,9 @@ class TurbineStage:
         self.stator = BladeGeometry(machine="turbine", flow="axial", stage=self, blade="stator", parameters={"AR": AR_stator, "zweiffel": zweiffel})
         self.rotor = BladeGeometry(machine="turbine", flow="axial", stage=self, blade="rotor", parameters={"AR": AR_rotor, "zweiffel": zweiffel})
 
+        # Cooling
+        self.solve_axial_cooling()
+
 
     def solve_radial(self): pass
 
@@ -734,20 +737,20 @@ class TurbineStage:
             self.deflections.append({"stator": stator_deflection, "rotor": rotor_deflection})
 
 
-    def axial_cooling(self, inlet:AxialStation, blade:str, parameters:dict):
+    def solve_axial_cooling(self):
         s1 = self.stations[1]
         s2 = self.stations[2]
         s3 = self.stations[3]
-        OTDF = parameters["OTDF"]
-        RTDF = parameters["RTDF"]
-        CDT = parameters["CDT"]
-        cp_coolant = parameters["Cp coolant"]
-        metal_TtMax = parameters["Metal TtMax"]
-        cooling_efficiency = parameters["cooling efficiency"]
+        OTDF = self.cooling["OTDF"]
+        RTDF = self.cooling["RTDF"]
+        CDT = self.cooling["CDT"]
+        cp_coolant = self.cooling["Cp coolant"]
+        metal_TtMax = self.cooling["Metal TtMax"]
+        cooling_efficiency = self.cooling["cooling efficiency"]
 
         # STATOR
         # Peak gas temperature seen by stator (using Inlet Total Temp)
-        T_peak_S = OTDF * (inlet.Tt - CDT) + inlet.Tt
+        T_peak_S = OTDF * (s1.Tt - CDT) + s1.Tt
         
         # Corrected temperature based on recovery factor (0.15 logic from original)
         T_peak_S_corr = T_peak_S - 0.15 * (s2.mid.V)^2 / (2 * cp_coolant)
@@ -771,7 +774,7 @@ class TurbineStage:
 
         # ROTOR
         # Peak gas temperature seen by rotor (using RTDF)
-        T_peak_R = RTDF * (inlet.Tt - CDT) + inlet.Tt
+        T_peak_R = RTDF * (s1.Tt - CDT) + s1.Tt
         
         # Corrected temperature based on relative velocity (W) for the rotor
         T_peak_R_corr = T_peak_R - 0.15 * (s2.mid.W)^2 / (2 * cp_coolant)
