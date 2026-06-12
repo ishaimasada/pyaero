@@ -374,12 +374,11 @@ class Turbine:
                             gamma = self.specification["gamma"]
                             Cp = self.specification["Cp"]
                             FAR = self.specification["FAR"]
-                            upstream = Station(W, Tt, Pt, FAR=FAR)
-                            parameters["upstream"] = upstream
+                            parameters["upstream"] = AxialStation(W, Tt, Pt, FAR=FAR)
                         else:
                             # Subsequent stages
-                            parameters["upstream"] = self.stages[idx - 1].upstream
-                        self.stages.append(TurbineStage(self, machine, flow, parameters))
+                            parameters["upstream"] = self.stages[idx - 1].stations[3]
+                        self.stages.append(TurbineStage(self, flow, parameters))
                 case "radial": pass
 
     # Turbine Cycle Analysis (design-point)
@@ -398,9 +397,126 @@ class Turbine:
         self.exit.set_statics(self.exit.M)
 
 
+    # Method for Component Design 
+    def display_results(self, flags):
+        if flags["plots"]:
+            # Velocity Triangles
+            plt_idx = 0
+            for stage in self.stages:
+                for radius_idx in range(self.parameters["number of radii"]):
+                    for station_idx in range(3):
+                        stage.stations[station_idx].triangles[radius_idx].plot_triangle(radius_idx, station_idx, plt_idx)
+                        plt_idx += 1
+                plt.savefig(f"Stage {stage.idx} Velocity Triangles.png")
+                plt.clf()
+
+            # Meridional View
+            self.r_coords = list()
+            self.z_coords = list()
+            for stage_idx, stage in enumerate(self.stages):
+                stator_r, stator_z = stage.stator.get_meridional_coordinates()
+                rotor_r, rotor_z = stage.rotor.get_meridional_coordinates()
+                if stage.idx > 1:
+                    # All axial coordinates of each blade start at 0 --> must shift each new blade row by the last axial position and axial spacing
+                    previous_rotor_z, _ = self.stages[stage_idx - 1]
+                    stator_z = list(numpy.array(stator_z) + numpy.array(previous_rotor_z))
+                    rotor_z = [z + stator_z[-2] + stage.stator.axial_spacing for z in rotor_z]
+                self.r_coords.extend(stator_r.extend(rotor_r))
+                self.z_coords.extend(stator_r.extend(rotor_r))
+            plt.plot(self.r_coords, self.z_coords)
+            plt.savefig("Meridional View.png")
+            plt.clf()
+            
+            # Blade Sections
+            # NOTE: doing blade sections only makes sense if a 2D Euler solver was used to interate the curvature of each upper surface, lower surface, and camberline of each section at every radius --> skip for now
+            '''
+            plt.savefig("Blade Sections.png")
+            plt.clf()
+            '''
+        if flags["data"]:
+            velocity_data = pandas.DataFrame(columns=[ "V", "Vax", "Vu", "W", "Wu", "U", "Mabs", "Mrel", "mdot", "Tt", "T", "Pt", "P", "rm", "rt", "rh", "area"])
+            mdot = numpy.array()
+            Tt = numpy.array()
+            T = numpy.array()
+            Pt = numpy.array()
+            P = numpy.array()
+            rm = numpy.array()
+            rt = numpy.array()
+            rh = numpy.array()
+            area = numpy.array()
+            for radius_idx in range(stage.num_radii):
+                V = numpy.array()
+                Vax = numpy.array()
+                Vu = numpy.array()
+                W = numpy.array()
+                Wu = numpy.array()
+                U = numpy.array()
+                Mabs = numpy.array()
+                Mrel = numpy.array()
+                mdot = numpy.array()
+                for stage in self.stages:
+                    # Stage Data
+                    V_stage, Vax_stage, Vu_stage, W_stage, Wu_stage, U_stage, Mabs_stage, Mrel_stage, mdot_stage, Tt_stage, T_stage, Pt_stage, P_stage, rm_stage, rt_stage, rh_stage, area_stage = stage.get_data(radius_idx)
+                    # Velocities
+                    numpy.append(V, V_stage)
+                    numpy.append(Vax, Vax_stage)
+                    numpy.append(Vu, Vu_stage)
+                    numpy.append(W, W_stage)
+                    numpy.append(Wu, Wu_stage)
+                    numpy.append(U, U_stage)
+                    numpy.append(Mabs, Mabs_stage)
+                    numpy.append(Mrel, Mrel_stage)
+                    # Thermodynamics
+                    numpy.append(mdot, mdot_stage)
+                    numpy.append(Tt, Tt_stage)
+                    numpy.append(T, T_stage)
+                    numpy.append(Pt, Pt_stage)
+                    numpy.append(P, P_stage)
+                    # Geometry
+                    numpy.append(rm, rm_stage)
+                    numpy.append(rt, rt_stage)
+                    numpy.append(rh, rh_stage)
+                    numpy.append(area, area_stage)
+                    # Performance
+                    #display_performance(stage, parameters.Specification)
+                if radius_idx == 0:
+                    thermo_data = pandas.DataFrame(
+                        {
+                            "mdot": mdot,
+                            "Tt": Tt,
+                            "T": T,
+                            "Pt": Pt,
+                            "P": P,
+                        }
+                    )
+                    geometry_data = pandas.DataFrame(
+                        {
+                            "rm": rm,
+                            "rt": rt,
+                            "rh": rh,
+                            "area": area
+                        }
+                    )
+                radius_data = pandas.DataFrame(
+                    {
+                        "V": V,
+                        "Vax": Vax,
+                        "Vu": Vu,
+                        "W": W,
+                        "Wu": Wu,
+                        "U": U,
+                        "Mabs": Mabs,
+                        "Mrel": Mrel,
+                    }
+                )
+                numpy.append(velocity_data, radius_data)
+
+
+
 # Velocity Triangle for axial turbomachines
 class VelocityTriangle:
-    def __init__(self, radius, omega, Vu, Vax, alpha, station=None, Mabs=None, Mrel=None):
+    def __init__(self, label, radius, omega, Vu, Vax, alpha, station=None, Mabs=None, Mrel=None):
+        self.label = label
         self.station = station
         self.radius = radius
         self.omega = omega
@@ -448,6 +564,25 @@ class VelocityTriangle:
             return None
         else:
             return self.W / numpy.sqrt(self.station.gamma * self.station.R * self.station.T)
+    
+    def plot_triangle(self, row_idx, column_idx, plt_idx):
+        # Absolute Velocities
+        plt.subplot(row_idx, column_idx, plt_idx)
+        plt.arrow(0, 0, self.Vax, 0, width=2, fc="blue") # Vax
+        plt.arrow(0, 0, self.Vax, self.Vu, width=2, fc='red') # V
+        plt.arrow(self.Vax, 0, 0, self.Vu, width=1.5, linestyle='--', fc='red') # Vu
+        
+        # Relative Velocities
+        plt.arrow(0, 0, self.Vax, self.Wu, width=2, fc='blue') # W
+        plt.arrow(self.Vax, 0, 0, self.Wu, width=1.5, linestyle='--', fc='blue') # Wu
+        
+        # Wheel Velocity --> connects the tips of V and W (V = U + W)
+        plt.arrow(self.Vax, self.Wu, 0, self.U, width=2.5, fc="brown")
+   
+        plt.title("Velocity Triangle", 'FontSize', 12)
+        plt.xlabel('Axial Velocity [m/s]', 'FontWeight', 'bold')
+        plt.ylabel('Tangential Velocity [m/s]', 'FontWeight', 'bold')
+        plt.legend('Location', 'northeastoutside')
 
 
 # Stations for axial turbomachines (adds radii and velocity triangles to the engine-flow stations)
@@ -482,16 +617,17 @@ class AxialStation(Station):
         if num_radii is not None:
             self.num_radii = num_radii
         self.radii = list(numpy.linspace(self.rhub, self.rtip, self.num_radii, endpoint=True, dtype=float))
-        for radius in self.radii:
+        for idx, radius in enumerate(self.radii):
             U = radius * self.omega
             Vu = self.mid.Vu # Free Vortex Equation
             alpha = numpy.atan(Vu / self.mid.Vax)
-            self.triangles.append(VelocityTriangle(self, U, Vu, self.mid.Vax, alpha))
+            label = f"{idx+1} / {num_radii}"
+            self.triangles.append(VelocityTriangle(self, label, U, Vu, self.mid.Vax, alpha))
 
             
     def plot_triangles(self):
-        #for triangle in self.triangles: triangle.plot_triangle
-        pass
+        for triangle in self.triangles: 
+            triangle.plot_triangle
 
 
 class BladeGeometry:
@@ -511,10 +647,10 @@ class BladeGeometry:
                             match self.blade.lower():
                                 case "stator":
                                     # AXIAL TURBINE STATOR 
-                                    self.get_axial_turbine_stator(self.parameters)
+                                    self.axial_turbine_stator(self.parameters)
                                 case "rotor":
                                     # AXIAL TURBINE ROTOR 
-                                    self.get_axial_turbine_rotor(self.parameters)
+                                    self.axial_turbine_rotor(self.parameters)
                         case "radial":
                             pass
                 case "compressor":
@@ -523,14 +659,16 @@ class BladeGeometry:
                             match self.blade.lower():
                                 case "stator":
                                     # AXIAL COMPRESSOR STATOR 
-                                    self.get_axial_compressor_stator(self.parameters)
+                                    self.axial_compressor_stator(self.parameters)
                                 case "rotor":
                                     # AXIAL COMPRESSOR ROTOR 
-                                    self.get_axial_compressor_rotor(self.parameters)
+                                    self.axial_compressor_rotor(self.parameters)
                         case "radial":
                             pass
 
-    def get_axial_turbine_stator(self, parameters):
+
+    def axial_turbine_stator(self):
+        # Axial Turbine Stator
         s1 = self.stage.stations[1]
         s2 = self.stage.stations[2]
         s3 = self.stage.stations[3]
@@ -541,29 +679,28 @@ class BladeGeometry:
         self.chord = self.h / self.AR
         
         # Stagger and Axial Chord
-        self.stagger = list()
-        self.cax = list()
-        self.deflections = list()
-        for radius_idx in range(self.stage.num_radii):
-            self.stagger.append((s1.triangles[radius_idx].alpha + s2.triangles[radius_idx].alpha) / 2)
-            self.cax.append(self.chord * numpy.cos(self.stagger[radius_idx]))
-            self.deflections.append(s2.triangles[radius_idx].alpha - s1.triangles[radius_idx].alpha)
+        self.stagger = [(s1.triangles[radius_idx].alpha + s2.triangles[radius_idx].alpha) / 2 for radius_idx in range(self.stage.num_radii)]
+        self.cax = [self.chord * numpy.cos(self.stagger[radius_idx]) for radius_idx in range(self.stage.num_radii)]
+        self.deflections = [s2.triangles[radius_idx].alpha - s1.triangles[radius_idx].alpha for radius_idx in range(self.stage.num_radii)]
         
-        # Stator specific parameters
+        # Taper Ratio & Axial Spacing (between Stator and Rotor)
         self.taper_ratio = self.cax[-1] / self.cax[0]
         self.axial_spacing = 0.25 * self.cax[(self.stage.num_radii + 1) / 2]
         
         # Solidity and Pitch
         self.solidity = (2/self.zweiffel) * numpy.cos(s2.mid.alpha)**2 * (numpy.tan(s2.mid.alpha) - numpy.tan(s1.mid.alpha))
         self.pitch = self.chord / self.solidity
+
+        # Number of Blades
         self.NOB = numpy.ceil((2 * numpy.pi * s1.mid.radius) / self.pitch)
         
         # Opening
         self.os = numpy.cos(s2.mid.alpha)
         self.opening = self.os * self.pitch
 
-    def get_axial_turbine_rotor(self, parameters):
-        # ROTOR 
+
+    def axial_turbine_rotor(self):
+        # Axial Turbine Rotor 
         s1 = self.stage.stations[1]
         s2 = self.stage.stations[2]
         s3 = self.stage.stations[3]
@@ -574,26 +711,41 @@ class BladeGeometry:
         self.chord = self.h / self.AR
         
         # Stagger and Axial Chord
-        self.stagger = list()
-        self.cax = list()
-        self.deflections = list()
-        for radius_idx in range(self.stage.num_radii):
-            self.stagger.append((s2.triangles[radius_idx].beta + s3.triangles[radius_idx].beta) / 2)
-            self.cax.append(self.chord * numpy.cos(self.stagger[radius_idx]))
-            self.deflections.append(s3.triangles[radius_idx].beta - s2.triangles[radius_idx].beta)
+        self.stagger = [(s2.triangles[radius_idx].beta + s3.triangles[radius_idx].beta) / 2 for radius_idx in range(self.stage.num_radii)]
+        self.cax = [self.chord * numpy.cos(self.stagger[radius_idx]) for radius_idx in range(self.stage.num_radii)]
+        self.deflections = [s3.triangles[radius_idx].beta - s2.triangles[radius_idx].beta for radius_idx in range(self.stage.num_radii)]
         
-        # Stator specific parameters
+        # Taper Ratio
         self.taper_ratio = self.cax[-1] / self.cax[0]
-        self.axial_spacing = 0.25 * self.cax[(self.stage.num_radii + 1) / 2]
         
         # Solidity and Pitch
         self.solidity = (2/self.zweiffel) * numpy.cos(s2.mid.beta)**2 * (numpy.tan(s2.mid.beta) - numpy.tan(s1.mid.beta))
         self.pitch = self.chord / self.solidity
+
+        # Number of Blades
         self.NOB = numpy.ceil((2 * numpy.pi * s1.mid.radius) / self.pitch)
         
         # Opening
         self.os = numpy.cos(s2.mid.beta)
         self.opening = self.os * self.pitch
+
+
+    def get_meridional_coordinates(self):
+        r_coords = self.stage.radii
+        z_coords = list()
+        for radius_idx in self.stage.num_radii:
+            if radius_idx == 0:
+                # Hub Leading Edge (Corner)
+                z_coords.append(0)
+            elif radius_idx < (self.stage.num_radii + 1) / 2:
+                # Leading Edge
+                z_coords.append((self.cax[0] - self.cax[radius_idx]) /  2)
+            else:
+                # Trailing Edge
+                # Formula used: leading Edge z-coordinate + axial chord length (leading edge coordinate from a radius index is the number of radii minus the given radius index)
+                z_coords.append(z_coords[self.stage.num_radii - radius_idx] + self.cax[radius_idx])
+        z_coords.append(0)
+        return r_coords, z_coords
 
 
 # General stage object to be used for turbines (handles stage calculations, not be used outside of component classes)
@@ -634,7 +786,7 @@ class TurbineStage:
         zweiffel = self.geometry["Zweiffel"]
 
         # Ensure odd number of radii (must have a "mid-radius")
-        if self.num_radii % 2 != 0 or self.num_radii < 3: raise ValueError("Number of radii per blade must be ")
+        if self.num_radii % 2 != 0 or self.num_radii < 3: raise ValueError("Number of radii per blade must be odd and greater than 3.")
 
         # Radii & Axial Velocities
         Rm3 = U3m * self.omega
@@ -662,7 +814,7 @@ class TurbineStage:
         Pt1 = self.upstream.Pt
         alpha1 = numpy.atan(Vu1m / Vax1)
         mid1 = VelocityTriangle(Rm1, self.omega, Vu1m, Vax1, alpha1)
-        s1 = AxialStation(W1, Tt1, Pt1, mid=mid1)
+        s1 = AxialStation(W1, Tt1, Pt1, mid=mid1, num_radii=self.num_radii)
         s1.T = s1.Tt - s1.mid.V**2/(2*s1.cp)
         s1.M = numpy.sqrt((2/(s1.gamma - 1)) * (s1.Tt/s1.T) - 1)
         s1.set_statics()
@@ -694,12 +846,16 @@ class TurbineStage:
         self.stations = {1: s1, 2: s2, 3: s3}
 
         # Degrees of Reaction (DoR)
-        self.get_DoR()
+        self.DoR = list()
+        for radius_idx in range(self.num_radii):
+            self.DoR.append(self.get_DoR(radius_idx))
 
         # Deflections
-        self.get_deflections()
+        self.deflections = list()
+        for radius_idx in range(self.num_radii):
+            self.deflections.append(self.get_deflection(radius_idx))
 
-        # Expansion Ratio
+        # Expansion Ratio (Inlet Pt / Exit Pt)
         self.ER = self.stations[1].Pt / self.stations[3].Pt
 
         # Blade Geometries
@@ -713,28 +869,18 @@ class TurbineStage:
     def solve_radial(self): pass
 
     
-    def get_DoR(self):
-        self.DoR = list()
-        s1 = self.stations[1]
-        s2 = self.stations[2]
-        s3 = self.stations[3]
-        for radius_idx in range(self.num_radii):
-            h2 = s2.ht - s2.triangles[radius_idx].V**2/2
-            h3 = s3.ht - s3.triangles[radius_idx].V**2/2
-            ht1 = s1.ht
-            ht3 = s3.ht
-            self.DoR.append((h2 - h3) / (ht1 - ht3))
+    def get_DoR(self, radius_idx):
+        h2 = self.stations[2].ht - self.stations[2].triangles[radius_idx].V**2/2
+        h3 = self.stations[3].ht - self.stations[3].triangles[radius_idx].V**2/2
+        ht1 = self.stations[1].ht
+        ht3 = self.stations[3].ht
+        return (h2 - h3) / (ht1 - ht3)
 
 
-    def get_deflections(self):
-        self.deflections = list()
-        s1 = self.stations[1]
-        s2 = self.stations[2]
-        s3 = self.stations[3]
-        for radius_idx in range(self.num_radii):
-            stator_deflection = s2.triangles[radius_idx].alpha - s1.triangles[radius_idx].alpha
-            rotor_deflection = s3.triangles[radius_idx].beta - s1.triangles[radius_idx].beta
-            self.deflections.append({"stator": stator_deflection, "rotor": rotor_deflection})
+    def get_deflection(self, radius_idx):
+        stator_deflection = self.stations[2].triangles[radius_idx].alpha - self.stations[1].triangles[radius_idx].alpha
+        rotor_deflection = self.stations[3].triangles[radius_idx].beta - self.stations[2].triangles[radius_idx].beta
+        return {"stator": stator_deflection, "rotor": rotor_deflection}
 
 
     def solve_axial_cooling(self):
@@ -800,53 +946,44 @@ class TurbineStage:
         self.total_mdot_cool = self.stator.mdot_cool + self.rotor.mdot_cool
 
 
-    def display_stage_results(self, Flags):
-        # Display Velocity Triangles
-        if Flags["plot triangles"]:
-            pass
-            '''
-            plot_triangles(stage.stations(1).Hub, stage.stations(1).Vax, 'Stator LE - Hub')
-            plot_triangles(stage.stations(2).Hub, stage.stations(2).Vax, 'Stator TE / Rotor LE - Hub')
-            plot_triangles(stage.stations(3).Hub, stage.stations(3).Vax, 'Rotor TE - Hub')
-            plot_triangles(stage.stations(1).Mid, stage.stations(1).Vax, 'Stator LE - Mid')
-            plot_triangles(stage.stations(2).Mid, stage.stations(2).Vax, 'Stator TE / Rotor LE - Mid')
-            plot_triangles(stage.stations(3).Mid, stage.stations(3).Vax, 'Rotor TE - Mid')
-            plot_triangles(stage.stations(1).Tip, stage.stations(1).Vax, 'Stator LE - Tip')
-            plot_triangles(stage.stations(2).Tip, stage.stations(2).Vax, 'Stator TE / Rotor LE - Tip')
-            plot_triangles(stage.stations(3).Tip, stage.stations(3).Vax, 'Rotor TE - Tip')
-            '''
-        # Display Meridional View
-        if Flags["plot meridional"]:
-            pass
-            #plot_meridional_view(stage)
-        # Display Blade Sections (and Export as CSV Files)
-        if Flags["plot sections"]:
-            pass
-            '''
-            export_section_coordinates(stage, 'Rotor', 'HPT_Rotor')
-            export_section_coordinates(stage, 'Stator', 'HPT_Stator')
-            '''
-        # Display Velocity Tables
-        if Flags["display velocities"]:
-            pass
-            '''
-            display_velocity_table(stage, 'Hub')
-            display_velocity_table(stage, 'Mid')
-            display_velocity_table(stage, 'Tip')
-            '''
-        # Display Thermodynamics Table
-        if Flags["display thermodynamics"]:
-            pass
-            #display_thermo_table(stage)
-        # Display Geometry Table
-        if Flags["display geometry"]:
-            pass
-            #display_geometry_table(stage)
-        # Display Performance
-        if Flags["display performance"]:
-            pass
-            #display_performance(stage, parameters.Specification)
-
+    # To be used by Turbine component class
+    def get_data(self, radius_idx):
+        V = numpy.array()
+        Vax = numpy.array()
+        Vu = numpy.array()
+        W = numpy.array()
+        Wu = numpy.array()
+        U = numpy.array()
+        Mabs = numpy.array()
+        Mrel = numpy.array()
+        mdot = numpy.array()
+        Tt = numpy.array()
+        T = numpy.array()
+        Pt = numpy.array()
+        P = numpy.array()
+        rm = numpy.array()
+        rt = numpy.array()
+        rh = numpy.array()
+        area = numpy.array()
+        for station in self.stations:
+            numpy.append(V, station.triangles[radius_idx].V)
+            numpy.append(Vax, station.triangles[radius_idx].Vax)
+            numpy.append(Vu, station.triangles[radius_idx].Vu)
+            numpy.append(W, station.triangles[radius_idx].W)
+            numpy.append(Wu, station.triangles[radius_idx].Wu)
+            numpy.append(U, station.triangles[radius_idx].U)
+            numpy.append(Mabs, station.triangles[radius_idx].Mabs)
+            numpy.append(Mrel, station.triangles[radius_idx].Mrel)
+            numpy.append(mdot, station.mdot)
+            numpy.append(Tt, station.Tt)
+            numpy.append(T, station.T)
+            numpy.append(Pt, station.Pt)
+            numpy.append(P, station.P)
+            numpy.append(rm, station.mid.radius)
+            numpy.append(rt, station.radii[-1])
+            numpy.append(rh, station.radii[0])
+            numpy.append(area, station.area)
+        return V, Vax, Vu, W, Wu, U, Mabs, Mrel, mdot, Tt, T, Pt, P, rm, rt, rh, area
 
 
 class CompressorStage:

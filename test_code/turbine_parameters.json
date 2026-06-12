@@ -47,12 +47,7 @@
         }
     ],
     "flags": {
-        "plot triangles": false,
-        "plot meridional": true,
-        "plot sections": false,
-        "display velocities": true,
-        "display thermodynamics": true,
-        "display geometry": true,
-        "display performance": true
+        "plots": false,
+        "data": false
     }
 }
