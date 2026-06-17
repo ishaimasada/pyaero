@@ -20,3 +20,10 @@ sys.path.append(r"../propulsion")
 from engine import *
 
 turbine = Turbine(upstream=None, compressor=None, component_parameters=parameters)
+
+# Change the current working directory to the file location
+filepath = os.path.abspath(__file__)
+directory = os.path.dirname(filepath)
+os.chdir(directory)
+
+turbine.display_results(parameters["flags"])

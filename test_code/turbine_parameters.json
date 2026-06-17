@@ -18,7 +18,6 @@
     },
     "stages": [
         {
-            "idx": 1,
             "aerodynamics": {
                 "loading coefficient": 2.4,
                 "flow coefficient": 1,
@@ -47,7 +46,7 @@
         }
     ],
     "flags": {
-        "plots": false,
+        "plots": true,
         "data": false
     }
 }
