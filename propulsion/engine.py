@@ -288,17 +288,82 @@ class Compressor:
 
 
 class Burner:
-    def __init__(self, upstream:Station, cycle_parameters, component_parameters=None):
+    def __init__(self, upstream:Station, cycle_parameters=None, component_parameters=None):
         # CYCLE ANALYSIS
-        self.Ptloss_b = cycle_parameters["total pressure loss"]
-        self.eta_b = cycle_parameters["efficiency"]
-        self.M_exit = cycle_parameters["exit M"]
-        self.engine = cycle_parameters["engine"]
-        self.LHV = self.engine.LHV
-        self.solve_exit(upstream)
+        if cycle_parameters != None:
+            self.Ptloss_b = cycle_parameters["total pressure loss"]
+            self.eta_b = cycle_parameters["efficiency"]
+            self.M_exit = cycle_parameters["exit M"]
+            self.engine = cycle_parameters["engine"]
+            self.LHV = self.engine.LHV
+            self.solve_exit(upstream)
+
         # COMPONENT DESIGN
-        if component_parameters != None: pass
+        if component_parameters != None:
+            self.machine = component_parameters["machine"]
+            Tt_in = component_parameters["inlet Tt"]
+            Pt_in = component_parameters["inlet Pt"]
+            Tt_exit = component_parameters["exit Tt"]
+            Pt_exit = component_parameters["exit Pt"]
+            self.Pt_loss = component_parameters["Pt loss"]
+            self.omega_cold = component_parameters["omega cold"]
+            self.K_OTDF = component_parameters["K OTDF"]
+            self.K_hot = component_parameters["K hot"]
+            self.liner_area_frac = component_parameters["liner area fraction"]
+            self.r_tip = component_parameters["r tip"]
+            self.L_combustor = component_parameters["combustor length"]
+            self.phi_PRZ = component_parameters["phi PRZ"]
+            self.phi_SEC = component_parameters["phi SEC"]
+            W = component_parameters["W"]
+            Wf = component_parameters["Wf"]
+            LHV = component_parameters["LHV"]
+            R = component_parameters["R"]
+            gamma = component_parameters["gamma"]
+            FAR = Wf / (W - Wf)
+            self.upstream = Station(W, Tt_in, Pt_in, FAR=FAR)
+            self.exit = Station(W + Wf, Tt_exit, Pt_exit)
+
+            # Calculations
+            FAR_stoichiometric = 1 / 15
+            FAR_overall = Wf / W
+            phi_overall = FAR_overall / FAR_stoichiometric
+            TR = Tt_exit / Tt_in
+            omega_hot = self.K_hot * (TR - 1)
+            omega_ref = self.omega_cold + omega_hot
+            self.Aref = numpy.sqrt( (R/2) * (W * numpy.sqrt(Tt_in) / Pt_in)**2 * (omega_ref / self.Pt_loss) )
+            dPt_check = omega_ref * (R/2) * (W * numpy.sqrt(Tt_in) / (self.Aref * Pt_in))**2
+            rho_t3 = Pt_in / (R * Tt_in)
+            self.Vref   = W / (rho_t3 * self.Aref)
+            self.q_ref  = 0.5 * rho_t3 * self.Vref**2
+            self.Mref = self.Vref / numpy.sqrt(gamma * R * Tt_in)
+            self.Aliner = self.liner_area_frac * self.Aref
+
+            if numpy.pi * self.r_tip**2 <= self.Aref:
+                raise ValueError('r_tip too small. Increase r_tip so that pi*r_tip^2 > Aref = %.6f m^2', self.Aref); en
+
+            self.r_hub = numpy.sqrt(self.r_tip**2 - self.Aref / numpy.pi)
+            self.Dl = (self.r_tip - self.r_hub)
+
+            self.Wa_PRZ = Wf / (self.phi_PRZ * FAR_stoichiometric)
+            self.Wa_to_SEC = Wf / (self.phi_SEC * FAR_stoichiometric)
+            self.Wa_SEC = self.Wa_to_SEC - self.Wa_PRZ
+            self.Wa_DIL = W - self.Wa_to_SEC
+
+            self.PRZ_Wa_W = (self.Wa_PRZ / W) * 100
+            self.SEC_Wa_W = (self.Wa_SEC / W) * 100
+            self.DIL_Wa_W = (self.Wa_DIL / W) * 100
+            self.OTDF = 1 - numpy.exp(1 / (-self.K_OTDF * (self.L_combustor / self.Dl) * self.omega_cold))
+            self.Vol = self.Aref * self.L_combustor
+            self.tau_res = self.L_combustor / self.Vref
+            self.tau_res_ms = self.tau_res * 1000
+            Pt3_atm = Pt_in / 101325
+            self.theta_i = (Wf * LHV) / (self.Vol * Pt3_atm)
+            self.theta_L = W / (self.Vol * (Pt3_atm**1.8) * 10**(0.00145 * (Tt_in - 400)))
+            self.eta_comb = (-5.46974e-10*self.theta_L**5) + (3.97923e-8*self.theta_L**4) - (8.73718e-6*self.theta_L**3) + (3.00007e-4*self.theta_L**2) - (4.568246e-3*self.theta_L) + 99.7
+            self.Aheff = self.Aref / numpy.sqrt(self.omega_cold)
+
     
+    # For Cycle Analaysis (not component design)
     def solve_exit(self, upstream):
         self.inlet = upstream
         self.exit = copy.deepcopy(self.inlet)
@@ -330,6 +395,76 @@ class Burner:
             error = (abs(FAR - FARnew) / FARnew) 
         return FARnew
         
+    
+    def display_results(self):
+        # Results Checks
+        all_pass = True
+        if self.OTDF > 0.25:
+            print('FLAG: OTDF = %.4f exceeds 0.25. Increase Lcomb or adjust liner sizing.\n', self.OTDF)
+            all_pass = False
+        if (self.theta_i / 1e6) > 60:
+            print('FLAG: theta_i = %.2f MW/(m^3*atm) exceeds 60 SLS limit. Increase volume.\n', self.theta_i / 1e6)
+            all_pass = False
+        if self.theta_L > 5:
+            print('FLAG: theta_L = %.4f exceeds 5 kg/(s*atm^1.8*m^3) SLS stability limit.\n', self.theta_L)
+            all_pass = False
+        if self.tau_res_ms < 3:
+            print('FLAG: Residence time = %.3f ms is below 3 ms minimum. Increase Lcomb.\n', self.tau_res_ms)
+            all_pass = False
+        if self.eta_comb < 95:
+            print('FLAG: Combustion efficiency = %.2f %% below 95%%. Reduce loading or increase volume.\n', self.eta_comb)
+            all_pass = False
+        if self.phi_PRZ < 0.8 or self.phi_PRZ > 1.3:
+            print('FLAG: phi_PRZ = %.4f outside stable ignition range 0.8-1.3.\n', self.phi_PRZ)
+            all_pass = False
+        if all_pass:
+            print('Design passes limitation checks.\n')
+
+        '''
+        print(' Combustor Preliminary Sizing Results\n')
+        print('\n--- Station Conditions ---\n')
+        print('Tt3:                                    %.2f K\n',    Tt3)
+        print('Tt4:                                    %.2f K\n',    Tt4)
+        print('Pt3:                                    %.3f kPa\n',  Pt3 / 1e3)
+        print('Pt4:                                    %.3f kPa\n',  Pt4 / 1e3)
+        print('mdot3:                              %.3f kg/s\n', mdot3)
+        print('mdot_fuel:                       %.4f kg/s\n', mdot_fuel)
+        print('FAR (overall):                   %.5f\n',      FAR_overall)
+        print('phi (overall):                    %.4f\n',      phi_overall)
+        print('\n--- Loss Coefficients ---\n')
+        print('TR = Tt4/Tt3:                           %.4f\n', TR)
+        print('omega_cold:                            %.2f\n',  omega_cold)
+        print('omega_hot:                             %.4f\n',  omega_hot)
+        print('omega_ref:                              %.4f\n',  omega_ref)
+        print('dPt/Pt (target):                       %.4f\n',  Pt_loss)
+        print('dPt/Pt (check from Aref):     %.4f\n',  dPt_check)
+        print('\n--- Reference Quantities ---\n')
+        print('Aref:                                   %.6f m^2\n',    Aref)
+        print('rho_t3:                               %.4f kg/m^3\n', rho_t3)
+        print('Vref:                                    %.4f m/s\n',    Vref)
+        print('q_ref:                                  %.2f Pa\n',     q_ref)
+        print('Mref:                                   %.5f\n',        Mref)
+        print('\n--- Liner Geometry ---\n')
+        print('Aliner (%d%% of Aref):    %.6f m^2\n', round(liner_area_frac*100), Aliner)
+        print('r_tip:                                    %.4f m\n',    r_tip)
+        print('r_hub:                                  %.4f m\n',    r_hub)
+        print('Dl = 2*(r_tip - r_hub):      %.4f m\n',    Dl)
+        print('\n--- Zone Air Distribution ---\n')
+        print('PRZ  (phi = %.2f):  mdot = %.4f kg/s   (%.1f%% total)\n', phi_PRZ, mdot_air_PRZ, frac_PRZ)
+        print('SEC  (phi = %.2f):  mdot = %.4f kg/s   (%.1f%% total)\n', phi_SEC, mdot_air_SEC, frac_SEC)
+        print('DIL  (remainder):   mdot = %.4f kg/s   (%.1f%% total)\n', mdot_air_DIL, frac_DIL)
+        print('\n--- Length, Volume, Residence Time ---\n')
+        print('Lcomb (input):                     %.4f m\n',  self.L_combustor)
+        print('OTDF:                                     %.4f\n',    self.OTDF)
+        print('Volume (Aref * Lcomb):     %.6f m^3\n', self.Vol)
+        print('Residence time:                   %.4f ms\n', self.tau_res_ms)
+        print('\n--- Liner Hole Area ---\n')
+        print('Aheff (total effective hole area):      %.6f m^2\n', self.Aheff)
+        print('\n--- Combustor Loading and Efficiency ---\n')
+        print('theta_i (intensity):                    %.4f MW/(m^3*atm)\n',        self.theta_i / 1e6)
+        print('theta_L (stability loading):      %.6f kg/(s*atm^1.8*m^3)\n', self.theta_L)
+        print('Combustion efficiency:            %.3f %%\n',                  self.eta_comb)
+        '''
 
 class Turbine:
     def __init__(self, upstream, compressor, cycle_parameters=None, component_parameters=None):
