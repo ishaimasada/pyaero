@@ -1,0 +1,18 @@
+{
+    "inlet": {
+            "W": 0.5409, 
+            "Tt": 1391.582,
+            "Pt": 219.13926221,
+            "FAR": 0.0205733,
+            "M": 0.43
+    },
+    "flameholder geometry": "vee gutter",
+    "num rings": 1,
+    "drag coefficient": 1.2,
+    "efficiency": 0.98,
+    "lower heating value": 4300000,
+    "base thickness": 0.01,
+    "inner diameter": 0.02,
+    "apex angle": 100,
+    "Tt exit": 1700
+}
