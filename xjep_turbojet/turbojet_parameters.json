@@ -1,0 +1,44 @@
+{
+    "parameters":{
+        "engine": {
+            "spools": 1,
+            "TET": 1510,
+            "PR": 4,
+            "Minf": 0,
+            "altitude": 0,
+            "mdot": 0.53,
+            "LHV": 43100000
+        },
+        "intake": {
+            "total pressure recovery": 0.98,
+            "inlet M": 0.3,
+            "exit M": 0.2
+        },
+        "compressor": {
+            "machine": "axial",
+            "e": 0.91,
+            "exit M": 0.4,
+            "inlet idx": 2,
+            "exit idx": 3,
+            "cooling": 0.0,
+            "packing": 0.0
+        },
+        "burner": {
+            "total pressure loss": 0.05,
+            "efficiency": 0.99,
+            "exit M": 0.4
+        },
+        "turbine": {
+            "machine": "axial",
+            "e": 0.95,
+            "mechanical efficiency": 0.99,
+            "exit M": 0.43,
+            "exit idx": 5
+        },
+        "nozzle": {
+            "C/CD": "C",
+            "discharge coefficient": 0.97,
+            "velocity coefficient": 0.98
+        }
+    }
+}

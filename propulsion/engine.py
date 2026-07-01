@@ -2,7 +2,7 @@
 Module for Cycle Analysis and preliminary component design 
 """
 
-#NOTE: Axial Turbomachinery assumes constant radial work distribution (dht/dr = 0) and Free Vortex Design (dVax/dr = 0)
+#NOTE: Axial Turbomachinery component classes assumes constant radial work distribution (dht/dr = 0) and Free Vortex Design (dVax/dr = 0)
 
 import matplotlib.pyplot as plt
 import pandas
@@ -189,41 +189,96 @@ class Station:
 
 
 class Inlet:
-    def __init__(self, cycle_parameters, component_parameters=None):
-        # CYCLE ANALYSIS
-        M_inlet = cycle_parameters["inlet M"]
-        M_exit = cycle_parameters["exit M"]
-        Pt_recovery = cycle_parameters["total pressure recovery"]
-        engine = cycle_parameters["engine"]
-        freestream = engine.ambient
+    def __init__(self, cycle_parameters=None, component_parameters=None):
+        if cycle_parameters != None:
+            # CYCLE ANALYSIS
+            M_inlet = cycle_parameters["inlet M"]
+            M_exit = cycle_parameters["exit M"]
+            Pt_recovery = cycle_parameters["total pressure recovery"]
+            engine = cycle_parameters["engine"]
+            freestream = engine.ambient
 
-        if hasattr(engine, "fan_diameter"):
-            D1 = engine.fan_diameter * 2.54 / 100 # in to m
-            [_, Tt_T, Pt_P, rhot_rho, _] = isentropic(M_inlet, freestream.gamma, lookup_key="M")
-            T1 = (1/Tt_T) * freestream.Tt
-            a1 = numpy.sqrt(freestream.gamma * freestream.R * T1)
-            V1 = M_inlet * a1
-            A1 = numpy.pi * (D1 / 2)**2
-            rho1 = freestream.rhot * (1/rhot_rho)
-            W1 = V1 * rho1 * A1
-        elif hasattr(engine, "W"):
-            W1 = engine.W
+            if hasattr(engine, "fan_diameter"):
+                D1 = engine.fan_diameter * 2.54 / 100 # in to m
+                [_, Tt_T, Pt_P, rhot_rho, _] = isentropic(M_inlet, freestream.gamma, lookup_key="M")
+                T1 = (1/Tt_T) * freestream.Tt
+                a1 = numpy.sqrt(freestream.gamma * freestream.R * T1)
+                V1 = M_inlet * a1
+                A1 = numpy.pi * (D1 / 2)**2
+                rho1 = freestream.rhot * (1/rhot_rho)
+                W1 = V1 * rho1 * A1
+            elif hasattr(engine, "W"):
+                W1 = engine.W
 
-        FAR = 0
-        self.freestream = Station(W1, freestream.Tt, freestream.Pt, FAR, M=freestream.Minf, idx=0) # Station 0
-        self.inlet = Station(W1, freestream.Tt, freestream.Pt, FAR, M=M_inlet, idx=1) # Station 1
-        
-        # Check if it's a BypassEngine
-        if isinstance(engine, BypassEngine):
-            bypass_W = W1*engine.B / (engine.B+1)
-            root_W = W1 - bypass_W
-            self.bypass_exit = Station(bypass_W, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=1.2)
-            self.root_exit = Station(root_W, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=2)
-        else:
-            self.exit = Station(W1, freestream.Tt, freestream.Pt*Pt_recovery, FAR, M=M_exit, idx=2) # Station 1
+            FAR = 0
+            self.freestream = Station(W1, freestream.Tt, freestream.Pt, FAR, M=freestream.Minf, idx=0) # Station 0
+            self.inlet = Station(W1, freestream.Tt, freestream.Pt, FAR, M=M_inlet, idx=1) # Station 1
+            
+            # Check if it's a BypassEngine
+            if isinstance(engine, BypassEngine):
+                bypass_W = W1*engine.B / (engine.B+1)
+                root_W = W1 - bypass_W
+                self.bypass_exit = Station(bypass_W, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=1.2)
+                self.root_exit = Station(root_W, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=2)
+            else:
+                self.exit = Station(W1, freestream.Tt, freestream.Pt*Pt_recovery, FAR, M=M_exit, idx=2) # Station 1
 
-        # COMPONENT DESIGN
-        if component_parameters != None: pass
+        if component_parameters != None: 
+            # COMPONENT DESIGN
+            W0 = component_parameters["freestream"]["W"]
+            Tt0 = component_parameters["freestream"]["Tt"]
+            Pt0 = component_parameters["freestream"]["Pt"]
+            gamma0 = component_parameters["freestream"]["gamma"]
+            R0 = component_parameters["freestream"]["R"]
+            cp0 = component_parameters["freestream"]["cp"]
+            M0 = component_parameters["freestream"]["M"]
+            M1 = component_parameters["M1"]
+            Mth = component_parameters["Mth"]
+            M_exit = component_parameters["M exit"]
+            
+            """ NOTE: N/R comes from a figure in Farohki. The user must read this value off of the graph based on the pressure coefficients """
+            self.N_R = component_parameters["N/R"]
+            self.CD = component_parameters["CD"]
+            self.Zth = component_parameters["Zth"]
+            self.freestream = Station(W0, Tt0, Pt0, M=M0, idx=0)
+            self.inlet = Station(W0, Tt0, Pt0, M=M1, idx=1)
+            self.throat = Station(W0, Tt0, Pt0, M=Mth, idx=1.2)
+            self.exit = Station(W0, Tt0, Pt0, M=M_exit, idx=2)
+
+            self.MFR = self.freestream.area / self.inlet.area
+            self.AR =  self.exit.area / self.inlet.area
+            self.CPR = (self.exit.P - self.inlet.P) / (self.inlet.Pt - self.inlet.P)
+            self.CPR_ideal = 1 - (1 / self.AR**2)
+            self.radii = self.get_radii()
+            self.N = self.radii[0] * self.N_R
+            self.z_coords = self.get_z_coords()
+
+
+    def get_radii(self):
+        r1 = numpy.sqrt(self.inlet.area / numpy.pi)
+        rth = numpy.sqrt(self.throat.area / numpy.pi)
+        r2 = numpy.sqrt(self.exit.area / numpy.pi)
+        return [r1, rth, r2]
+    
+    def get_z_coords(self):
+        z1 = 0
+        zth = z1 + self.Zth
+        z2 = zth + self.N
+        return [z1, zth, z2]
+    
+    def plot_contour(self):
+        plt.figure()
+        plt.plot(self.z_coords, self.radii)
+        plt.xlabel("Axial Distance [m]")
+        plt.ylabel("Radius [m]")
+        plt.title("Inlet Contour")
+        plt.grid()
+        plt.xlim([0, 0.1])
+        plt.ylim([0, 0.1])
+        #plt.legend()
+        plt.show()
+
+
 
 
 class Compressor:
@@ -1303,17 +1358,17 @@ class Afterburner:
         self.Pt_loss_dry = self.get_loss(self.inlet.M, Me_dry, self.inlet.gamma, self.inlet.gamma)
         self.Pt_loss_wet = self.get_loss(self.inlet.M, Me_wet, self.inlet.gamma, self.exit.gamma)
 
-    # (Vee-Gutter Method)
+    # Vee-Gutter Method
     def get_Me(self, A, gamma):
         return numpy.sqrt(((2*(gamma - 1) - gamma*A**2 + numpy.sqrt((gamma*A**2 - 2*gamma + 2)**2 + 2*((gamma - 1)**2)*(A**2 - 2)))) / ((gamma - 1)*(A**2 - 2)))
 
-    # (Vee-Gutter Method)
+    # Vee-Gutter Method
     def get_A(self, q):
         Mi = self.inlet.M
         gamma_i = self.inlet.gamma
         return ((1 + gamma_i*Mi**2*(1-self.CD/2)) / (gamma_i*Mi)) * numpy.sqrt(((gamma_i - 1)/(1 + (gamma_i - 1)/2*Mi**2)) * (1 / (1 + (q/self.inlet.ht))))
 
-    # (Vee-Gutter Method) --> Eq. 5.99
+    # Vee-Gutter Method --> Eq. 5.99
     def get_loss(self, Mi, Me, gamma_i, gamma_e):
         return (1 + gamma_i*Mi**2*(1 - self.CD/2)*((1 + (gamma_e - 1)/2*Me**2)**(gamma_e/(gamma_e-1)))) / ((1 + gamma_e*Me**2)*((1 + (gamma_i - 1)/2*Mi**2)**(gamma_i/(gamma_i-1))))
 
