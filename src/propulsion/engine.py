@@ -745,12 +745,12 @@ class Turbine:
     def solve_structural(self):
         for idx, stage in enumerate(self.stages):
             self.material = self.component_parameters["material"]
-            y = self.material["y"]
-            x = self.material["x"]
+            stage.bore_radius = self.component_parameters["stages"][idx]["geometry"]["bore radius"]
             design_stress = self.material["design stress"] * 10**6 # Pa
             density = self.material["density"]
             root_area = self.component_parameters["stages"][idx]["geometry"]["root area"]
-            bore_radius = self.component_parameters["stages"][idx]["geometry"]["bore radius"]
+            y = self.material["y"]
+            x = self.material["x"]
             Ah = root_area * 10**-6  # m^2
             # Calculate AN2, capacity, time til fracture, and centrifugal stress
             cmsx4_polynomial = numpy.polyfit(x, y, 3)
@@ -763,10 +763,10 @@ class Turbine:
             # Rotor Disk
             stage.Wr = 1.25 * stage.rotor.cax[0]
             stage.hr = copy.deepcopy(stage.Wr)
-            stage.rim_blade_stress = (stage.centrifugal_stress * stage.rotor.NOB * Ah) / (2 * numpy.pi * stage.stations[1].rhub * stage.Wr)
-            r_r = stage.stations[1].rhub - stage.hr
-            stage.Wdr = stage.Wr * (stage.hr/r_r) * ((stage.rim_blade_stress/design_stress)*(1 + (r_r/stage.hr)) + (density*stage.omega**2*r_r**2)/(2*design_stress) * (1 + (stage.hr/(2*r_r))) - 1)
-            stage.Wd = stage.Wdr * numpy.exp((density*(stage.omega*r_r)**2)/(2*design_stress) * (1 - (bore_radius/(r_r))**2))
+            stage.r_r = stage.stations[1].rhub - stage.hr
+            stage.rim_blade_stress = (stage.centrifugal_stress *10**6 * stage.rotor.NOB * Ah) / (2 * numpy.pi * stage.stations[1].rhub * stage.Wr)
+            stage.Wdr = stage.Wr * (stage.hr/stage.r_r) * ((stage.rim_blade_stress/design_stress)*(1 + (stage.r_r/stage.hr)) + (density*stage.omega**2*stage.r_r**2)/(2*design_stress) * (1 + (stage.hr/(2*stage.r_r))) - 1)
+            stage.Wd = stage.Wdr * numpy.exp((density*(stage.omega*stage.r_r)**2)/(2*design_stress) * (1 - (stage.bore_radius/stage.r_r)**2))
             stage.torsional_stress = self.power / (2 * numpy.pi * stage.stations[1].rhub**2 * stage.Wd * stage.omega)
 
     # Cycle method for performing preliminary component design ("specification" portion of the component design parameters)
@@ -826,7 +826,8 @@ class Turbine:
         if flags["data"]:
             velocity_keys = ["V", "Vax", "Vu", "W", "Wu", "U", "Mabs", "Mrel", "alpha", "beta", "T", "P", "reaction"]
             thermo_keys = ["mdot", "Tt", "T", "Pt", "P"]
-            geometry_keys = ["rm", "rt", "rh", "area", "stator NOB", "stator cax", "stator cm", "stator stagger", "rotor NOB", "rotor cax", "rotor cm", "rotor stagger", "axial spacing"]
+            geometry_keys = ["rm", "rt", "rh", "area", "stator NOB", "stator cax", "stator cm", "stator stagger", "rotor NOB", 
+                             "rotor cax", "rotor cm", "rotor stagger", "axial spacing", "Wr", "hr", "Wdr", "Wd", "r_r", "bore radius"]
             raw_velocities = {radius_idx: {key: list() for key in velocity_keys} for radius_idx in range(self.num_radii)}
             thermo = {key: list() for key in thermo_keys}
             geometry = {key: list() for key in geometry_keys}
@@ -853,6 +854,13 @@ class Turbine:
                 geometry["rotor cm"].extend(stage_geometry["rotor cm"])
                 geometry["rotor stagger"].extend(stage_geometry["rotor stagger"])
                 geometry["axial spacing"].extend(stage_geometry["axial spacing"])
+                if hasattr(stage, "centrifugal_stress"):
+                    geometry["Wr"].extend(numpy.full(3, stage.Wr))
+                    geometry["hr"].extend(numpy.full(3, stage.hr))
+                    geometry["Wdr"].extend(numpy.full(3, stage.Wdr))
+                    geometry["Wd"].extend(numpy.full(3, stage.Wd))
+                    geometry["r_r"].extend(numpy.full(3, stage.r_r))
+                    geometry["bore radius"].extend(numpy.full(3, stage.bore_radius))
                 # Velocities
                 for radius_idx in range(stage.num_radii):
                     raw_velocities[radius_idx]["V"].extend(stage_velocities[radius_idx]["V"])

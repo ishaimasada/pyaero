@@ -33,8 +33,8 @@
                 "AR stator": 1.22, 
                 "AR rotor": 1,
                 "Zweiffel": 0.8,
-                "root area": 9.62058,
-                "bore radius": 0.01
+                "root area": 10.26405,
+                "bore radius": 0.02
             },
             "cooling": {
                 "OTDF": 0.25, 
@@ -49,7 +49,7 @@
     "material":{
         "name": "CMSX-4",
         "density": 9100,
-        "design stress": 206,
+        "design stress": 180,
         "y": [
                 22.80415944540728, 23.677642980935875, 24.301559792027728,
                 24.967071057192374, 25.147313691507797, 26.76949740034662,

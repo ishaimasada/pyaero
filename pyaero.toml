@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyaero"
+version = "0.1.0"
+description = "gas turbine design tool"
+dependencies = [
+    "matplotlib.pyplot",
+    "numpy",
+    "pandas",
+    "json",
+    "copy",
+    "sys",
+    "os
+]
