@@ -7,11 +7,7 @@ name = "pyaero"
 version = "0.1.0"
 description = "gas turbine design tool"
 dependencies = [
-    "matplotlib.pyplot",
+    "matplotlib",
     "numpy",
-    "pandas",
-    "json",
-    "copy",
-    "sys",
-    "os
+    "pandas"
 ]
