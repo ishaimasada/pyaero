@@ -386,7 +386,7 @@ def two_dimension_airofil(M_freestream, thetas):
     Machs, nus = numpy.vectorize(expansion_fan)(M_freestream, deflection_angles)
     '''
 
-def get_TM_velocities(theta, Vr, Vtheta, h):
+def get_TM_velocities(theta, Vr, Vtheta, h, gamma):
     def get_Vr_double_prime(theta, Vr, Vtheta):
         return (Vr * (Vtheta**2) - ((gamma - 1) / 2) * (1 - Vr**2 - Vtheta**2) * (2*Vr + Vtheta * (1 / numpy.tan(theta)))) / (((gamma - 1) / 2) * (1 - Vr**2 - Vtheta**2) - Vtheta**2)
     
