@@ -1,9 +1,5 @@
-'''
-Example usage code for the Engine class
-'''
-import json
-import sys
-import os
+''' Example usage code for the Engine class '''
+import json, os
 
 # Change the current working directory to the file location
 filepath = os.path.abspath(__file__)
@@ -14,10 +10,8 @@ os.chdir(directory)
 with open("turbojet_parameters.json", "r") as file:
     parameters = json.load(file)["parameters"]
 
-sys.path.append(r"..\propulsion")
-
 # Import all types from engine module
-from engine import *
+from pyaero.propulsion.engine import *
 
 # Create an instance of the Engine class
 engine_parameters = parameters["engine"]
@@ -35,8 +29,8 @@ directory = os.path.dirname(filepath)
 os.chdir(directory)
 
 # Output the station data to an excel
-station_data.to_excel("station_data.xlsx", index=False)
+engine.write_station_data("cycle.xlsx")
 
 # Display performance & plot the temperatures and pressures
 print(performance)
-engine.plot_thermo()
+#engine.plot_thermo()

@@ -5,7 +5,6 @@
 import matplotlib.pyplot as plt
 import pandas
 import numpy
-import json
 import copy
 import sys
 import os
@@ -487,7 +486,8 @@ class Burner:
         elif hasattr(self.engine, "Wf"):
             self.exit.Wf = self.engine.Wf
             FAR = self.exit.Wf / upstream.W
-            TET = bisection(self.get_FAR, FAR, 1800, 100, self.inlet.Tt, 0, self.LHV, self.eta_b)
+            self.exit.ht = self.inlet.ht - (self.engine.compressor.exit.ht - self.engine.compressor.inlet.ht)
+            TET = bisection(self.get_FAR, FAR, 1800, 100, "increasing", self.inlet.Tt, 0, FAR, self.LHV, self.eta_b)
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
         self.exit.Pt = self.inlet.Pt * (1 - self.Ptloss_b)
         self.exit.Tt = TET
@@ -1752,7 +1752,6 @@ class RadialStage:
         return r_coords, z_coords
 
 
-
 class Mixer:
     def __init__(self, hot_inlet:Station, cold_inlet:Station, component_parameters=None): 
         # CYCLE ANALYSIS
@@ -1843,7 +1842,7 @@ class Afterburner:
                     self.exit.M = 1
                 elif Tt_Ttstar2 <= 1:
                     self.exit.Tt = self.Ttmax
-                    self.exit.M = bisection(get_Tt_Ttstar, Tt_Ttstar2, 1, 0, self.inlet.gamma)
+                    self.exit.M = bisection(get_Tt_Ttstar, Tt_Ttstar2, 1, 0, "increasing", self.inlet.gamma)
 
                 self.exit.FAR = Burner.get_FAR(self, self.exit.Tt, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta) 
                 self.exit.Wf = (self.inlet.W - self.inlet.Wf) * self.exit.FAR
@@ -2077,12 +2076,6 @@ class Recuperator:
         return self.hot_exit
 
 
-class Bleed:
-    def __init__(self, cooling, packing):
-        self.cooling = cooling
-        self.packing = packing
-
-
 def format_axes(ax, title, ylabel):
     ax.set_title(title, fontsize=14, weight='bold')
     ax.set_ylabel(ylabel, fontsize=12)
@@ -2131,104 +2124,46 @@ class Engine:
 
         # Include the engine object in each set of component parameters
         for component_name in parameters:
-            if component_name != "engine":
+            if isinstance(parameters[component_name], dict):
                 parameters[component_name]["engine"] = self
+            elif isinstance(parameters[component_name], list):
+                for component_parameters in parameters[component_name]:
+                    component_parameters["engine"] = self
+        self.components = []
 
-        # Handle spool counts
-        match self.spools:
-            case 1:
-                self.PR = parameters["engine"]["PR"]
-                parameters["compressor"]["PR"] = self.PR
-                self.components = [
-                    inlet := Inlet(parameters["intake"]),
-                    compressor := Compressor(inlet.exit, parameters["compressor"]),
-                    burner := Burner(compressor.exit, parameters["burner"]),
-                    turbine := Turbine(burner.exit, compressor, parameters["turbine"]),
-                    exhaust := Nozzle(turbine.exit, parameters["nozzle"])
-                ]
-                '''
-                self.components = [inlet := Inlet(parameters["intake"])]
-                parameters["compressor"]["upstream"] = inlet.exit
-                parameters["burner"]["upstream"] = compressor.exit
-                parameters["turbine"]["upstream"] = burner.exit
-                parameters["turbine"]["compressor"] = compressor
-                parameters["nozzle"]["upstream"] = turbine.exit
-                self.components.append(compressor := Compressor(parameters["compressor"]))
-                self.components.append(burner := Burner(parameters["burner"]))
-                self.components.append(turbine := Turbine(parameters["turbine"]))
-                self.components.append(exhaust := Nozzle(turbine.exit, parameters["nozzle"]))
-                self.compressor = compressor
-                self.turbine = turbine
-                '''
-                self.compressor = compressor
-                self.turbine = turbine
-            case 2:
-                self.OPR = parameters["engine"]["OPR"]
-                self.HPR = parameters["engine"]["HPR"]
-                self.LPR = self.OPR / self.HPR
-                parameters["hpc"]["PR"] = self.HPR
-                parameters["lpc"]["PR"] = self.LPR
+        # Inlet
+        self.inlet = Inlet(parameters["intake"])
+        self.components.append(self.inlet)
 
-                self.components = [
-                    inlet := Inlet(parameters["intake"]),
-                    lpc := Compressor(inlet.exit, parameters["lpc"]),
-                    hpc := Compressor(lpc.exit, parameters["hpc"]),
-                    burner := Burner(hpc.exit, parameters["burner"]),
-                    hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
-                    lpt := Turbine(hpt.exit, lpc, parameters["lpt"]),
-                    exhaust := Nozzle(lpt.exit, parameters["nozzle"])
-                ]
-                self.lpc = lpc
-                self.hpc = hpc
-                self.hpt = hpt
-                self.lpt = lpt
-            case 3:
-                self.OPR = parameters["engine"]["OPR"]
-                self.HPR = parameters["engine"]["HPR"]
-                self.IPR = parameters["engine"]["IPR"]
-                self.LPR = self.OPR / self.HPR / self.IPR
-                parameters["hpc"]["PR"] = self.HPR
-                parameters["ipc"]["PR"] = self.IPR
-                parameters["lpc"]["PR"] = self.LPR
+        # Compressors
+        self.compressors = []
+        for idx, compressor_parameters in enumerate(parameters["compressors"]):
+            compressor = Compressor(self.components[idx].exit, compressor_parameters)
+            self.components.append(compressor)
+            self.compressors.append(compressor)
 
-                self.components = [
-                    inlet := Inlet(parameters["intake"]),
-                    lpc := Compressor(inlet.exit, parameters["lpc"]),
-                    ipc := Compressor(lpc.exit, parameters["hpc"]),
-                    hpc := Compressor(ipc.exit, parameters["hpc"]),
-                    burner := Burner(hpc.exit, parameters["burner"]),
-                    hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
-                    ipt := Turbine(hpt.exit, ipc, parameters["ipt"]),
-                    lpt := Turbine(ipt.exit, lpc, parameters["lpt"]),
-                    exhaust := Nozzle(lpt.exit, parameters["nozzle"])
-                ]
-                self.lpc = lpc
-                self.ipc = ipc
-                self.hpc = hpc
-                self.hpt = hpt
-                self.ipt = ipt
-                self.lpt = lpt
-            case _:
-                raise ValueError("Number of spools must be either 1, 2, or 3.")
+        # Burner
+        self.burner = Burner(self.components[-1].exit, parameters["burner"])
+        self.components.append(self.burner)
 
-        self.inlet = inlet
-        self.burner = burner
-        self.exhaust = exhaust
-        # Check for a recuperator in the user input parameters
+        # Turbines
+        self.turbines = []
+        for idx, turbine_parameters in enumerate(parameters["turbines"]):
+            turbine = Turbine(self.components[idx + len(self.compressors) + 1].exit, self.compressors[idx], turbine_parameters)
+            self.components.append(turbine)
+            self.turbines.append(turbine)
+
+        # Afterburner
+        if "afterburner" in parameters: 
+            self.afterburner = Afterburner(self.components[-1].exit, parameters["afterburner"])
+            self.components.append(self.afterburner)
+
+        # Nozzle
+        self.exhaust = Nozzle(self.components[-1].exit, parameters["exhaust"])
+        self.components.append(self.exhaust)
+
+        # Recuperator
         if "recuperator" in parameters: self.add_recuperator(parameters["recuperator"])
-        # Check for an afterburner in the user input parameters
-        if "afterburner" in parameters: self.add_afterburner(parameters["afterburner"])
-
-
-    # Add an afterburner to the engine
-    def add_afterburner(self, parameters):
-        insert_idx = len(self.components) - 1
-        inlet_station = self.components[insert_idx - 1].exit
-        afterburner = Afterburner(inlet_station, parameters)
-        self.afterburner = afterburner
-        self.components[insert_idx].solve_exit(afterburner.exit)
-        self.components.insert(insert_idx, afterburner) 
-
 
     # Add a recuperator to the engine
     def add_recuperator(self, parameters):
@@ -2245,6 +2180,35 @@ class Engine:
                 component.solve_exit(self.components[idx - 1].exit)
         self.components.insert(insert_idx, recuperator)
         self.recuperator = recuperator
+
+
+    # Retrieve flow properties at every station
+    def get_station_data(self): 
+        raw_data = list()
+        if "recuperator" in self.parameters:
+            for component in self.components:
+                if isinstance(component, Inlet):
+                    raw_data.append(component.freestream.get_properties())
+                    raw_data.append(component.inlet.get_properties())
+                    raw_data.append(component.exit.get_properties())
+                elif isinstance(component, Recuperator):
+                    raw_data.append(component.cold_exit.get_properties())
+                elif isinstance(component, Turbine):
+                    raw_data.append(component.exit.get_properties())
+                    raw_data.append(self.recuperator.pass_hot_stream(component.exit).get_properties())
+                else:
+                    raw_data.append(component.exit.get_properties())
+        else:
+            for component in self.components:
+                if isinstance(component, Inlet):
+                    raw_data.append(component.freestream.get_properties())
+                    raw_data.append(component.inlet.get_properties())
+                    raw_data.append(component.exit.get_properties())
+                else:
+                    raw_data.append(component.exit.get_properties())
+        rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
+        station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
+        return station_data
 
 
     # Retrieve flow properties at every station
@@ -2277,6 +2241,7 @@ class Engine:
         station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
         station_data.to_excel(filename, index=False)
 
+
     # Plot the temperatures and pressures throughout the whole engine
     def plot_thermo(self):
         Tt = self.get_station_data()["Tt [K]"]
@@ -2304,6 +2269,7 @@ class Engine:
         plt.tight_layout()
         plt.show()
 
+
     # Display the full engine performance
     def get_performance(self):
         """ Performance Parameters """
@@ -2314,15 +2280,14 @@ class Engine:
         A = station_data["Area [m^2]"].values
         FAR = station_data["FAR"].values
         Wf_in = self.burner.exit.Wf
-        FARexit = self.exhaust.exit.FAR
         pressure_thrust = A[-1] * ((P[-1]*1000) - self.ambient.P)
         pressure_power = pressure_thrust * V[-1]
-        # Specific Thrust
-        T_ma = V[-1]*(1 + FAR[-1]) - V[0] + pressure_thrust/W[0] 
-        # Thrust Specific Fuel Consumption (TSFC)
-        TSFC = (FAR[-1] / T_ma) * 10**6 
         # Thrust
-        thrust = T_ma * W[0] 
+        thrust = V[-1]*W[-1] - V[0]*W[0] + A[-1] * ((P[-1]*1000) - self.ambient.P)
+        # Specific Thrust
+        T_ma = thrust / W[0]
+        # Thrust Specific Fuel Consumption (TSFC)
+        TSFC = (FAR[-1] / T_ma) * 1000
         # Propulsive Efficiency
         eta_p = thrust*V[0] / (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) 
         # Thermal Efficiency
@@ -2331,8 +2296,8 @@ class Engine:
         eta_o = eta_p * eta_th 
         performance = pandas.DataFrame({
                                          "Specific Thrust [m/sec]": T_ma,
-                                         "TSFC [g/(sec*kN)]": TSFC,
-                                         "Thrust [kN]": thrust/1000,
+                                         "TSFC [g/(sec*N)]": TSFC,
+                                         "Thrust [N]": thrust,
                                          "Propulsive Efficiency": eta_p,
                                          "Thermal Efficiency": eta_th,
                                          "Overall Efficiency": eta_o

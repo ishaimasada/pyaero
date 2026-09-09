@@ -3,7 +3,6 @@
         "engine": {
             "spools": 1,
             "TET": 1510,
-            "PR": 3.6,
             "Minf": 0,
             "altitude": 0,
             "mdot": 0.53,
@@ -14,15 +13,18 @@
             "inlet M": 0.1,
             "exit M": 0.3
         },
-        "compressor": {
-            "machine": "axial",
-            "e": 0.91,
-            "exit M": 0.4,
-            "inlet idx": 2,
-            "exit idx": 3,
-            "cooling": 0.0,
-            "packing": 0.0
-        },
+        "compressors": [
+            {
+                "PR": 3.6,
+                "machine": "axial",
+                "e": 0.91,
+                "exit M": 0.4,
+                "inlet idx": 2,
+                "exit idx": 3,
+                "cooling": 0.0,
+                "packing": 0.0
+            }
+        ],
         "recuperator": {
             "pi_hot": 0.94,
             "pi_cold": 0.94,
@@ -35,6 +37,15 @@
             "efficiency": 0.99,
             "exit M": 0.4
         },
+        "turbines": [
+            {
+                "machine": "axial",
+                "e": 0.95,
+                "mechanical efficiency": 0.99,
+                "exit M": 0.43,
+                "exit idx": 5
+            }
+        ],
         "afterburner": {
             "toggle": true,
             "efficiency": 0.99,
@@ -45,14 +56,7 @@
             "cold exit M": 0.2, 
             "hot exit M": 0.3
         },
-        "turbine": {
-            "machine": "axial",
-            "e": 0.95,
-            "mechanical efficiency": 0.99,
-            "exit M": 0.43,
-            "exit idx": 5
-        },
-        "nozzle": {
+        "exhaust": {
             "C/CD": "C",
             "discharge coefficient": 0.97,
             "velocity coefficient": 0.98
