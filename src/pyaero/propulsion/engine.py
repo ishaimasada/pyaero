@@ -481,28 +481,31 @@ class Burner:
         # Handle different choices for user input parameters
         if hasattr(self.engine, "TET"):
             TET = self.engine.TET
-            FAR = self.get_FAR(TET, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta_b)
+            FAR = Burner.get_FAR(TET, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta_b, self)
             self.exit.Wf = self.inlet.W * FAR
         elif hasattr(self.engine, "Wf"):
             self.exit.Wf = self.engine.Wf
             FAR = self.exit.Wf / upstream.W
-            self.exit.ht = self.inlet.ht - (self.engine.compressor.exit.ht - self.engine.compressor.inlet.ht)
-            TET = bisection(self.get_FAR, FAR, 1800, 100, "increasing", self.inlet.Tt, 0, FAR, self.LHV, self.eta_b)
+            self.exit.ht = self.inlet.ht - (self.engine.compressors[0].exit.ht - self.engine.compressors[0].inlet.ht)
+            TET = bisection(Burner.get_FAR, FAR, 1800, 100, "increasing", self.inlet.Tt, FAR, self.LHV, self.eta_b, self)
+            self.engine.TET = TET
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
         self.exit.Pt = self.inlet.Pt * (1 - self.Ptloss_b)
         self.exit.Tt = TET
         self.exit.set_statics(self.exit.M)
+        self.engine.TET = TET
 
     # Cycle method
-    def get_FAR(self, T2, T1, FAR1, LHV, eta):
+    @staticmethod
+    def get_FAR(T2, T1, FAR1, LHV, eta, burner_object):
         FARnew = 0.02
         FAR = -1 
-        h1 = self.inlet.get_ht(T1, FAR1)
+        h1 = burner_object.inlet.get_ht(T1, FAR1)
         tolerance = 0.00001
         error = (abs(FAR - FARnew) / FARnew) 
         while error > tolerance:
             FAR = FARnew
-            h2 = self.exit.get_ht(T2, FAR)
+            h2 = burner_object.exit.get_ht(T2, FAR)
             FARnew = (h2 - h1) / (LHV * eta)
             error = (abs(FAR - FARnew) / FARnew) 
         return FARnew
