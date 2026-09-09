@@ -2,14 +2,13 @@
     "parameters":{
         "engine": {
             "spools": 2,
-            "OPR": 20,
             "TET": 1510,
             "bypass ratio": 2.85,
             "mixed": true,
             "fan": true,
             "Minf": 0.85,
             "altitude": 12162.97,
-            "fan diameter": 47.7,
+            "diameter": 47.7,
             "LHV": 43100000
         },
         "intake": {
@@ -17,46 +16,51 @@
             "inlet M": 0.6,
             "exit M": 0.55
         },
-        "lpc": {
-            "machine": "axial",
-            "e": 0.93,
-            "exit M": 0.3,
-            "cooling": 0.0,
-            "packing": 0.0,
-            "root PR": 2.5,
-            "tip PR": 2.5,
-            "root exit M": 0.3,
-            "tip exit M": 0.3
-        },
-        "hpc": {
-            "machine": "axial",
-            "e": 0.91,
-            "exit M": 0.3,
-            "inlet idx": 2.05,
-            "exit idx": 3,
-            "cooling": 0.03,
-            "packing": 0
-        },
+        "compressors": [
+            {
+                "machine": "axial",
+                "e": 0.93,
+                "exit M": 0.3,
+                "cooling": 0.0,
+                "packing": 0.0,
+                "root PR": 2.5,
+                "tip PR": 2.5,
+                "root exit M": 0.3,
+                "tip exit M": 0.3
+            },
+            {
+                "PR": 8,
+                "machine": "axial",
+                "e": 0.91,
+                "exit M": 0.3,
+                "inlet idx": 2.05,
+                "exit idx": 3,
+                "cooling": 0.03,
+                "packing": 0
+            }
+        ],
         "burner": {
             "total pressure loss": 0.05,
             "efficiency": 0.99,
             "exit M": 0.5
         },
-        "hpt": {
-            "machine": "axial",
-            "e": 0.95,
-            "mechanical efficiency": 0.99,
-            "exit M": 0.45,
-            "exit idx": 4.4
-        },
-        "lpt": {
-            "machine": "axial",
-            "e": 0.95,
-            "mechanical efficiency": 0.99,
-            "exit M": 0.5,
-            "exit idx": 5
-        },
-        "nozzle": {
+        "turbines": [
+            {
+                "machine": "axial",
+                "e": 0.92,
+                "mechanical efficiency": 0.99,
+                "exit M": 0.45,
+                "exit idx": 4.4
+            },
+            {
+                "machine": "axial",
+                "e": 0.92,
+                "mechanical efficiency": 0.99,
+                "exit M": 0.5,
+                "exit idx": 5
+            }
+        ],
+        "exhaust": {
             "C/CD": "C",
             "discharge coefficient": 0.97,
             "velocity coefficient": 0.98

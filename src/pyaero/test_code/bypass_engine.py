@@ -1,9 +1,8 @@
-'''
-Example usage code for the BypassEngine class
-'''
-import json
-import os
-import sys
+''' Example usage code for the BypassEngine class '''
+import json, os
+
+# Import all types from engine module
+from pyaero.propulsion.engine import * 
 
 # Change the current working directory to the file location
 filepath = os.path.abspath(__file__)
@@ -13,11 +12,6 @@ os.chdir(directory)
 # Load parameters from JSON file
 with open("bypass_parameters.json", "r") as file:
     parameters = json.load(file)["parameters"]
-
-sys.path.append(r"../propulsion")
-
-# Import all types from engine module
-from engine import * # type: ignore
 
 engine_parameters = parameters["engine"]
 engine = BypassEngine(engine_parameters) # type: ignore
@@ -29,7 +23,7 @@ filepath = os.path.abspath(__file__)
 directory = os.path.dirname(filepath)
 os.chdir(directory)
 
-station_data.to_excel("station_data.xlsx", index=False)
+station_data.to_excel("cycle.xlsx", index=False)
 print(station_data)
 print(performance)
 engine.plot_thermo()
