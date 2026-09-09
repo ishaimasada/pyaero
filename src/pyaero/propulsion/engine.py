@@ -196,8 +196,8 @@ class Inlet:
             engine = cycle_parameters["engine"]
             freestream = engine.ambient
 
-            if hasattr(engine, "fan_diameter"):
-                D1 = engine.fan_diameter * 2.54 / 100 # in to m
+            if hasattr(engine, "diameter"):
+                D1 = engine.diameter * 2.54 / 100 # in to m
                 [_, Tt_T, Pt_P, rhot_rho, _] = isentropic(M_inlet, freestream.gamma, lookup_key="M")
                 T1 = (1/Tt_T) * freestream.Tt
                 a1 = numpy.sqrt(freestream.gamma * freestream.R * T1)
@@ -283,7 +283,7 @@ class Inlet:
 
 
 class Compressor:
-    def __init__(self, upstream:Station, cycle_parameters=None, component_parameters=None, root_upstream=None):
+    def __init__(self, upstream:Station, cycle_parameters=None, component_parameters=None, tip_upstream=None):
         # CYCLE ANALYSIS
         if cycle_parameters != None:
             engine = cycle_parameters["engine"]
@@ -298,8 +298,8 @@ class Compressor:
                 self.tipPR = cycle_parameters["tip PR"]
                 Mroot_exit = cycle_parameters["root exit M"]
                 Mtip_exit = cycle_parameters["tip exit M"]
-                self.root_inlet = copy.deepcopy(root_upstream)
-                self.tip_inlet = copy.deepcopy(upstream)
+                self.root_inlet = copy.deepcopy(upstream)
+                self.tip_inlet = copy.deepcopy(tip_upstream)
                 self.root_inlet.idx = "2"
                 self.tip_inlet.idx = "1.2"
                 self.root_exit = self.solve_exit(self.root_inlet, "2.05", self.rootPR, 0, 0, Mroot_exit)
@@ -2105,11 +2105,11 @@ class Engine:
         self.ambient = Ambient(self.altitude, Minf=self.Minf)
 
         # Handle user errors in engine parameters
-        if "mdot" in engine_parameters and "fan diameter" in engine_parameters:
+        if "mdot" in engine_parameters and "diameter" in engine_parameters:
             raise ValueError("Error. Cannot have two sizing parameters. Must choose either inlet mass flow or fan face diameter.")
         else:
             if "mdot" in engine_parameters: self.W = engine_parameters["mdot"] # kg/sec
-            elif "fan diameter" in engine_parameters: self.fan_diameter = engine_parameters["front diameter"] # inches
+            elif "diameter" in engine_parameters: self.diameter = engine_parameters["diameter"] # inches
         if "TET" in engine_parameters and "mdotf" in engine_parameters:
             raise ValueError("Error. Cannot have two burner parameters. Must choose either TET or fuel mass flow rate.")
         else:
@@ -2152,7 +2152,7 @@ class Engine:
         # Turbines
         self.turbines = []
         for idx, turbine_parameters in enumerate(parameters["turbines"]):
-            turbine = Turbine(self.components[idx + len(self.compressors) + 1].exit, self.compressors[idx], turbine_parameters)
+            turbine = Turbine(self.components[idx + len(self.compressors) + 1].exit, self.compressors[len(self.compressors)-1-idx], turbine_parameters)
             self.components.append(turbine)
             self.turbines.append(turbine)
 
@@ -2290,7 +2290,7 @@ class Engine:
         # Specific Thrust
         T_ma = thrust / W[0]
         # Thrust Specific Fuel Consumption (TSFC)
-        TSFC = (FAR[-1] / T_ma) * 1000
+        TSFC = (self.burner.exit.Wf / thrust) * 10**6
         # Propulsive Efficiency
         eta_p = thrust*V[0] / (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) 
         # Thermal Efficiency
@@ -2299,7 +2299,7 @@ class Engine:
         eta_o = eta_p * eta_th 
         performance = pandas.DataFrame({
                                          "Specific Thrust [m/sec]": T_ma,
-                                         "TSFC [g/(sec*N)]": TSFC,
+                                         "TSFC [g/(sec*kN)]": TSFC,
                                          "Thrust [N]": thrust,
                                          "Propulsive Efficiency": eta_p,
                                          "Thermal Efficiency": eta_th,
@@ -2323,7 +2323,7 @@ class Engine:
     def off_design(self): pass
 
 
-''' handles turbofan (mixed/unmixed) and variable bypass ramjet '''
+''' Handles TurboFans and Variable-Bypass Ramjets '''
 class BypassEngine(Engine):
     def __init__(self, engine_parameters):
         self.spools = engine_parameters["spools"]
@@ -2337,11 +2337,11 @@ class BypassEngine(Engine):
         self.ambient = Ambient(self.altitude, Minf=self.Minf)
 
         # Handle user errors in engine parameters
-        if "mdot" in engine_parameters and "fan diameter" in engine_parameters:
+        if "mdot" in engine_parameters and "diameter" in engine_parameters:
             raise ValueError("Error. Cannot have two sizing parameters. Must choose either inlet mass flow or fan face diameter.")
         else:
             if "mdot" in engine_parameters: self.W = engine_parameters["mdot"] # kg/sec
-            elif "fan diameter" in engine_parameters: self.fan_diameter = engine_parameters["fan diameter"] # inches
+            elif "diameter" in engine_parameters: self.diameter = engine_parameters["diameter"] # inches
 
 
     def set_components(self, parameters):
@@ -2349,165 +2349,69 @@ class BypassEngine(Engine):
 
         # Include the engine object in each set of component parameters
         for component_name in parameters:
-            if component_name != "engine":
+            if isinstance(parameters[component_name], dict):
                 parameters[component_name]["engine"] = self
+            elif isinstance(parameters[component_name], list):
+                for component_parameters in parameters[component_name]:
+                    component_parameters["engine"] = self
+        self.components = []
 
-        # Handle spool counts
-        match self.spools:
-            case 1:
-                self.PR = parameters["engine"]["PR"]
-                parameters["compressor"]["PR"] = self.PR
+        # Inlet
+        self.inlet = Inlet(parameters["intake"])
+        self.components.append(self.inlet)
 
-                # Check for user errors
-                if self.is_fan: raise ValueError("Cannot have a fan with only 1 spool. Must be at least two spools.")
-                if self.mixed == False: raise ValueError("Must have a mixed exhaust with only 1 spool.")
-                self.components = [
-                    inlet := Inlet(parameters["intake"]),
-                    compressor := Compressor(inlet.root_exit, parameters["compressor"]),
-                    burner := Burner(compressor.exit, parameters["burner"]),
-                    turbine := Turbine(burner.exit, compressor, parameters["turbine"]),
-                    mixer := Mixer(turbine.exit, inlet.bypass_exit),
-                    exhaust := Nozzle(mixer.exit, parameters["nozzle"])
-                ]
-                self.compressor = compressor
-                self.turbine = turbine
-            case 2:
-                # Turbofan or Turbojet
-                if self.is_fan: 
-                    parameters["lpc"]["fan"] = True
-                    self.OPR = parameters["engine"]["OPR"]
-                    self.LPR = parameters["lpc"]["root PR"]
-                    self.HPR = self.OPR / self.LPR
-                    parameters["hpc"]["PR"] = self.HPR
-
-                    # Mixed Exhaust
-                    match self.mixed:
-                        case True: 
-                            self.components = [
-                                inlet := Inlet(parameters["intake"]),
-                                lpc := Compressor(inlet.bypass_exit, parameters["lpc"], root_upstream=inlet.root_exit),
-                                hpc := Compressor(lpc.root_exit, parameters["hpc"]),
-                                burner := Burner(hpc.exit, parameters["burner"]),
-                                hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
-                                lpt := Turbine(hpt.exit, lpc, parameters["lpt"]),
-                                mixer := Mixer(lpt.exit, lpc.tip_exit),
-                                exhaust := Nozzle(mixer.exit, parameters["nozzle"])
-                            ]
-                            self.mixer = mixer
-                        case False: 
-                            self.components = [
-                                inlet := Inlet(parameters["intake"]),
-                                lpc := Compressor(inlet.bypass_exit, parameters["lpc"], root_upstream=inlet.root_exit),
-                                cold_nozzle := Nozzle(lpc.tip_exit, parameters["cold nozzle"]),
-                                hpc := Compressor(lpc.exit, parameters["hpc"]),
-                                burner := Burner(hpc.exit, parameters["burner"]),
-                                hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
-                                lpt := Turbine(hpt.exit, lpc, parameters["lpt"]),
-                                exhaust := Nozzle(lpt.exit, parameters["nozzle"])
-                            ]
-                            self.cold_nozzle = cold_nozzle
-                else: 
-                    parameters["lpc"]["fan"] = False
-                    self.OPR = parameters["engine"]["OPR"]
-                    self.LPR = parameters["engine"]["LPR"]
-                    self.HPR = self.OPR / self.LPR
-                    parameters["hpc"]["PR"] = self.HPR
-                    parameters["lpc"]["PR"] = self.LPR
-
-                    # Mixed Exhaust
-                    if self.mixed == False: raise ValueError("Must have a mixed exhaust if there's no fan.")
-
-                    self.components = [
-                        inlet := Inlet(parameters["intake"]),
-                        lpc := Compressor(inlet.root_exit, parameters["lpc"]),
-                        hpc := Compressor(lpc.exit, parameters["hpc"]),
-                        burner := Burner(hpc.exit, parameters["burner"]),
-                        hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
-                        lpt := Turbine(hpt.exit, lpc, parameters["lpt"]),
-                        mixer := Mixer(lpt.exit, inlet.bypass_exit),
-                        exhaust := Nozzle(mixer.exit, parameters["nozzle"])
-                    ]
-                    self.mixer = mixer
-                self.lpc = lpc
-                self.hpc = hpc
-                self.hpt = hpt
-                self.lpt = lpt
-            case 3:
-                # Check if the engine is a turbofan
+        # Compressors
+        self.compressors = []
+        for idx, compressor_parameters in enumerate(parameters["compressors"]):
+            if idx == 0: 
                 if self.is_fan:
-                    parameters["lpc"]["fan"] = True
-                    self.OPR = parameters["engine"]["OPR"]
-                    self.LPR = parameters["lpc"]["root PR"]
-                    self.HPR = parameters["engine"]["HPR"]
-                    self.IPR = self.OPR / self.HPR / self.LPR
-                    parameters["hpc"]["PR"] = self.HPR
-                    parameters["ipc"]["PR"] = self.IPR
-                    # Mixed Exhaust
-                    match self.mixed:
-                        case True: 
-                            self.components = [
-                                inlet := Inlet(parameters["intake"]),
-                                lpc := Compressor(inlet.exit, parameters["lpc"]),
-                                ipc := Compressor(lpc.exit, parameters["hpc"]),
-                                hpc := Compressor(ipc.exit, parameters["hpc"]),
-                                burner := Burner(hpc.exit, parameters["burner"]),
-                                hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
-                                ipt := Turbine(hpt.exit, ipc, parameters["ipt"]),
-                                lpt := Turbine(ipt.exit, lpc, parameters["lpt"]),
-                                mixer := Mixer(lpt.exit, lpc.tip_exit),
-                                exhaust := Nozzle(mixer.exit, parameters["nozzle"])
-                            ]
-                            self.mixer = mixer
-                        case False:
-                            self.components = [
-                                inlet := Inlet(parameters["intake"]),
-                                lpc := Compressor(inlet.exit, parameters["lpc"]),
-                                cold_nozzle := Nozzle(lpc.tip_exit, parameters["cold nozzle"]),
-                                ipc := Compressor(lpc.exit, parameters["hpc"]),
-                                hpc := Compressor(ipc.exit, parameters["hpc"]),
-                                burner := Burner(hpc.exit, parameters["burner"]),
-                                hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
-                                ipt := Turbine(hpt.exit, ipc, parameters["ipt"]),
-                                lpt := Turbine(ipt.exit, lpc, parameters["lpt"]),
-                                exhaust := Nozzle(lpt.exit, parameters["nozzle"])
-                            ]
-                            self.cold_nozzle = cold_nozzle
+                    compressor_parameters["fan"] = True
+                    compressor = Compressor(self.inlet.root_exit, compressor_parameters, tip_upstream=self.inlet.bypass_exit)
+                    self.components.append(compressor)
+                    self.compressors.append(compressor)
+                    continue
                 else:
-                    parameters["lpc"]["fan"] = False
-                    self.OPR = parameters["engine"]["OPR"]
-                    self.HPR = parameters["engine"]["HPR"]
-                    self.IPR = parameters["engine"]["IPR"]
-                    self.LPR = self.OPR / self.HPR / self.IPR
-                    parameters["hpc"]["PR"] = self.HPR
-                    parameters["ipc"]["PR"] = self.IPR
-                    parameters["lpc"]["PR"] = self.LPR
-                    # Mixed Exhaust
-                    if self.mixed == False: raise ValueError("Must have a mixed exhaust if there's no fan.")
-                    self.components = [
-                        inlet := Inlet(parameters["intake"]),
-                        lpc := Compressor(inlet.root_exit, parameters["lpc"]),
-                        ipc := Compressor(lpc.exit, parameters["hpc"]),
-                        hpc := Compressor(ipc.exit, parameters["hpc"]),
-                        burner := Burner(hpc.exit, parameters["burner"]),
-                        hpt := Turbine(burner.exit, hpc, parameters["hpt"]),
-                        ipt := Turbine(hpt.exit, ipc, parameters["ipt"]),
-                        lpt := Turbine(ipt.exit, lpc, parameters["lpt"]),
-                        mixer := Mixer(lpt.exit, inlet.bypass_exit),
-                        exhaust := Nozzle(mixer.exit, parameters["nozzle"])
-                    ]
-                    self.mixer = mixer
-                self.lpc = lpc
-                self.ipc = ipc
-                self.hpc = hpc
-                self.hpt = hpt
-                self.ipt = ipt
-                self.lpt = lpt
-            case _:
-                raise ValueError("Number of spools must be either 1, 2, or 3.")
+                    inlet = self.inlet.root_exit
+            elif idx == 1 and hasattr(self.compressors[idx-1], "is_fan"): 
+                inlet = self.compressors[idx-1].root_exit
+            else:
+                inlet = self.compressors[idx-1].exit
+            compressor = Compressor(inlet, compressor_parameters)
+            self.components.append(compressor)
+            self.compressors.append(compressor)
 
-        self.inlet = inlet
-        self.burner = burner
-        self.exhaust = exhaust
+        # Burner
+        self.burner = Burner(self.components[-1].exit, parameters["burner"])
+        self.components.append(self.burner)
+
+        # Turbines
+        self.turbines = []
+        for idx, turbine_parameters in enumerate(parameters["turbines"]):
+            turbine = Turbine(self.components[idx + len(self.compressors) + 1].exit, self.compressors[len(self.compressors) - 1 - idx], turbine_parameters)
+            self.components.append(turbine)
+            self.turbines.append(turbine)
+
+        # Mixer & Nozzle(s)
+        match self.mixed:
+            case True:
+                # Mixer
+                if self.is_fan:
+                    self.mixer = Mixer(self.turbines[-1].exit, self.compressors[0].tip_exit)
+                else:
+                    self.mixer = Mixer(self.turbines[-1].exit, self.inlet.bypass_exit)
+                self.exhaust = Nozzle(self.mixer.exit, parameters["exhaust"])
+                self.components.append(self.mixer)
+                self.components.append(self.exhaust)
+            case False:
+                # Cold Nozzle
+                if self.is_fan:
+                    self.cold_nozzle = Nozzle(self.compressors[0].tip_exit, parameters["cold nozzle"])
+                else:
+                    self.cold_nozzle = Nozzle(self.inlet.bypass_exit, parameters["cold nozzle"])
+                self.components.insert(2, self.cold_nozzle)
+                self.exhaust = Nozzle(self.turbines[-1].exit, parameters["nozzle"])
+                self.components.append(self.exhaust)
+
         # Check for an afterburner in the user input parameters
         if "afterburner" in parameters: self.add_afterburner(parameters["afterburner"])
 
