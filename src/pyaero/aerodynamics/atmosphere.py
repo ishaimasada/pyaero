@@ -1,12 +1,11 @@
-import math
-import os
+import math, os
 
 # Change the current working directory to the file location
 filepath = os.path.abspath(__file__)
 directory = os.path.dirname(filepath)
 os.chdir(directory)
 
-from compressible import isentropic
+from pyaero.aerodynamics.compressible import isentropic
 
 # Only metric units
 def atmosphere(height, unit = "metric"):
