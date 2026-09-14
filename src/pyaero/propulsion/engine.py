@@ -1072,8 +1072,7 @@ class VelocityTriangle:
     def Mabs(self, value): self._Mabs = value
 
     def get_Mabs(self): 
-        if self.station is None:
-            return None
+        if self.station is None: return None
         else:
             return self.V / numpy.sqrt(self.station.gamma * self.station.R * self.station.T)
 
@@ -1084,8 +1083,7 @@ class VelocityTriangle:
     def Mrel(self, value): self._Mrel = value
 
     def get_Mrel(self): 
-        if self.station is None:
-            return None
+        if self.station is None: return None
         else:
             return self.W / numpy.sqrt(self.station.gamma * self.station.R * self.station.T)
 
@@ -1536,8 +1534,8 @@ class AxialStage:
         Ptrel2_ideal = Ptrel1 * (Ttrel2 / Ttrel1)**(s2.gamma/(s2.gamma-1))
         Ptrel2 = Ptrel2_ideal - blade_loss * (Ptrel1 - s1.P)
         s2.P = Ptrel2 * (s2.T / Ttrel2)**(s2.gamma/(s2.gamma-1))
-        s2.Pt = s2.P * (s2.Tt / s2.T)**(s2.gamma/(s2.gamma-1))
-        s2.Pt = s1.Pt * (s2.Tt / s1.Tt)**(s2.gamma*(efficiency*(s2.gamma-1)))
+        s2.Pt = s1.Pt * (s2.Tt / s1.Tt)**(s2.gamma/(efficiency*(s2.gamma-1)))
+        self.PR = s2.Pt / s1.Pt
         s2.mid.set_station(s2)
         s2.M = numpy.sqrt((2/(s2.gamma - 1)) * ((s2.Tt / s2.T) - 1))
         s2.set_statics()
@@ -1592,7 +1590,7 @@ class AxialStage:
         # Performance Parameters
         self.phi = self.stations[2].mid.V/self.stations[2].mid.U
         self.psi = self.delta_ht / self.stations[2].mid.U**2 
-        self.ER = self.stations[3].Pt / self.stations[1].Pt
+        self.PR = self.stations[3].Pt / self.stations[1].Pt
         self.power = self.stations[1].W * (self.stations[3].ht - self.stations[1].ht)
         self.AN2 = self.stations[2].area * self.component.rpm**2 / 1e6
         self.delta_ht_actual = self.stations[2].mid.U**2 * self.psi / 1000
@@ -1743,7 +1741,7 @@ class AxialStage:
         thermo = {key: list() for key in ["mdot", "Tt", "T", "Pt", "P"]}
         geometry = {key: list() for key in ["rm", "rt", "rh", "area", "stator NOB", "stator cax", "stator cm", "stator stagger", "stator solidity", "rotor NOB", "rotor cax", "rotor cm", "rotor stagger", "rotor solidity", "axial spacing"]}
         performance = {
-            "ER": self.ER, 
+            "PR": self.PR, 
             "power (kW)": self.power/1000, 
             "self work split": self.work_split, 
             "running work split": self.running_work_split,
