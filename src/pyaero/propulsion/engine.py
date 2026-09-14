@@ -1169,38 +1169,34 @@ class RadialStation(Station):
 class BladeGeometry:
     def __init__(self, machine, flow, stage, blade:str, parameters:dict=None):
         self.machine = machine
+        self.flow = flow
         self.stage = stage
         self.blade = blade
         self.parameters = parameters
-
         if self.parameters is not None:
             match machine:
                 case "turbine":
                     match flow:
                         case "axial":
-                            self.AR = parameters["AR"]
-                            self.zweiffel = parameters["zweiffel"]
                             match self.blade.lower():
                                 case "stator":
                                     # AXIAL TURBINE STATOR 
-                                    self.axial_turbine_stator()
+                                    self.axial_stator(self.stage.stations[1], self.stage.stations[2])
                                 case "rotor":
                                     # AXIAL TURBINE ROTOR 
-                                    self.axial_turbine_rotor()
+                                    self.axial_rotor(self.stage.stations[2], self.stage.stations[3])
                         case "radial":
                             pass
                 case "compressor":
                     match flow:
                         case "axial":
-                            self.solidity = parameters["solidity"]
-                            self.NOB = parameters["NOB"]
                             match self.blade.lower():
                                 case "rotor":
                                     # AXIAL COMPRESSOR ROTOR 
-                                    self.axial_compressor_rotor()
+                                    self.axial_rotor(self.stage.stations[1], self.stage.stations[2])
                                 case "stator":
                                     # AXIAL COMPRESSOR STATOR 
-                                    self.axial_compressor_stator()
+                                    self.axial_stator(self.stage.stations[2], self.stage.stations[3])
                         case "radial":
                             match self.blade.lower():
                                 case "rotor":
@@ -1211,81 +1207,87 @@ class BladeGeometry:
                                     self.radial_compressor_stator()
 
 
-    def axial_turbine_stator(self):
-        # Axial Turbine Stator
-        s1 = self.stage.stations[1]
-        s2 = self.stage.stations[2]
-        s3 = self.stage.stations[3]
-        S_rh_avg = (s1.rhub + s2.rhub) / 2
-        S_rt_avg = (s1.rtip + s2.rtip) / 2
+    def axial_stator(self, station_inlet, station_outlet):
+        s_in = station_inlet
+        s_out = station_outlet
+        S_rh_avg = (s_in.rhub + s_out.rhub) / 2
+        S_rt_avg = (s_in.rtip + s_out.rtip) / 2
         self.HT_ratio = S_rh_avg / S_rt_avg
         self.h = S_rt_avg - S_rh_avg
-        self.chord = self.h / self.AR
-        self.stagger = [(s1.triangles[radius_idx].alpha + s2.triangles[radius_idx].alpha) / 2 for radius_idx in range(self.stage.num_radii)]
-        self.cax = [self.chord * abs(numpy.cos(self.stagger[radius_idx])) for radius_idx in range(self.stage.num_radii)]
-        self.deflections = [s2.triangles[radius_idx].alpha - s1.triangles[radius_idx].alpha for radius_idx in range(self.stage.num_radii)]
+        match self.machine:
+            case "turbine":
+                self.AR = self.parameters["AR"]
+                self.zweiffel = self.parameters["zweiffel"]
+                self.chord = self.h / self.AR
+                self.taper_ratio = self.cax[-1] / self.cax[0]
+                self.solidity = (2/self.zweiffel) * numpy.cos(s_out.mid.alpha)**2 * (numpy.tan(s_out.mid.alpha) - numpy.tan(s_in.mid.alpha))
+                self.pitch = self.chord / self.solidity
+                self.NOB = numpy.ceil((2 * numpy.pi * s_in.mid.radius) / self.pitch)
+                self.os = numpy.cos(s_out.mid.alpha)
+                self.opening = self.os * self.pitch
+            case "compressor":
+                self.solidity = self.parameters["solidity"]
+                self.NOB = self.parameters["NOB"]
+                self.pitch = (2 * numpy.pi * s_in.mid.radius) / self.NOB
+                self.chord = self.pitch * self.solidity
+                self.AR = self.h / self.chord
+                self.stagger = [(s_in.triangles[radius_idx].alpha + s_out.triangles[radius_idx].alpha) / 2 for radius_idx in range(self.stage.component.num_radii)]
+                self.cax = [self.chord * numpy.cos(self.stagger[radius_idx]) for radius_idx in range(self.stage.component.num_radii)]
+                self.deflections = [s_out.triangles[radius_idx].alpha - s_in.triangles[radius_idx].alpha for radius_idx in range(self.stage.component.num_radii)]
+                self.taper_ratio = self.cax[-1] / self.cax[0]
+                self.zweiffel = (2/self.solidity) * numpy.cos(s_out.mid.alpha)**2 * (numpy.tan(s_out.mid.alpha) - numpy.tan(s_in.mid.alpha))
+        self.stagger = self.get_stagger_angles(s_in, s_out, blade="stator") #[(s1.triangles[radius_idx].beta + s2.triangles[radius_idx].beta) / 2 for radius_idx in range(self.stage.component.num_radii)]
+        self.cax = self.get_cax()
+        self.deflections = self.get_deflections(s_in, s_out)
         self.taper_ratio = self.cax[-1] / self.cax[0]
-        self.solidity = (2/self.zweiffel) * numpy.cos(s2.mid.alpha)**2 * (numpy.tan(s2.mid.alpha) - numpy.tan(s1.mid.alpha))
-        self.pitch = self.chord / self.solidity
-        self.NOB = numpy.ceil((2 * numpy.pi * s1.mid.radius) / self.pitch)
-        self.os = numpy.cos(s2.mid.alpha)
-        self.opening = self.os * self.pitch
-
-    def axial_turbine_rotor(self):
-        # Axial Turbine Rotor 
-        s1 = self.stage.stations[1]
-        s2 = self.stage.stations[2]
-        s3 = self.stage.stations[3]
-        R_rh_avg = (s2.rhub + s3.rhub) / 2
-        R_rt_avg = (s2.rtip + s3.rtip) / 2
-        self.HT_ratio = R_rh_avg / R_rt_avg
-        self.h = R_rt_avg - R_rh_avg
-        self.chord = self.h / self.AR
-        self.stagger = [(s2.triangles[radius_idx].beta + s3.triangles[radius_idx].beta) / 2 for radius_idx in range(self.stage.num_radii)]
-        self.cax = [self.chord * abs(numpy.cos(self.stagger[radius_idx])) for radius_idx in range(self.stage.num_radii)]
-        self.deflections = [s3.triangles[radius_idx].beta - s2.triangles[radius_idx].beta for radius_idx in range(self.stage.num_radii)]
-        self.taper_ratio = self.cax[-1] / self.cax[0]
-        self.solidity = (2/self.zweiffel) * numpy.cos(s3.mid.beta)**2 * (numpy.tan(s2.mid.beta) - numpy.tan(s3.mid.beta))
-        self.pitch = self.chord / self.solidity
-        self.NOB = numpy.ceil((2 * numpy.pi * s1.mid.radius) / self.pitch)
-        self.os = numpy.cos(s2.mid.beta)
-        self.opening = self.os * self.pitch
-
-    def axial_compressor_rotor(self):
-        # Axial Compressor Rotor 
-        s1 = self.stage.stations[1]
-        s2 = self.stage.stations[2]
-        s3 = self.stage.stations[3]
-        rh_avg = (s1.rhub + s2.rhub) / 2
-        rt_avg = (s1.rtip + s2.rtip) / 2
+    
+    def axial_rotor(self, station_inlet, station_outlet):
+        s_in = station_inlet
+        s_out = station_outlet
+        rh_avg = (s_in.rhub + s_out.rhub) / 2
+        rt_avg = (s_in.rtip + s_out.rtip) / 2
         self.HT_ratio = rh_avg / rt_avg
         self.h = rt_avg - rh_avg
-        self.pitch = (2 * numpy.pi * s1.mid.radius) / self.NOB
-        self.chord = self.pitch * self.solidity
-        self.AR = self.h / self.chord
-        self.stagger = [(s1.triangles[radius_idx].beta + s2.triangles[radius_idx].beta) / 2 for radius_idx in range(self.stage.component.num_radii)]
-        self.cax = [self.chord * numpy.cos(self.stagger[radius_idx]) for radius_idx in range(self.stage.component.num_radii)]
-        self.deflections = [s2.triangles[radius_idx].beta - s1.triangles[radius_idx].beta for radius_idx in range(self.stage.component.num_radii)]
+        match self.machine:
+            case "turbine":
+                s1 = self.stage.stations[1]
+                self.AR = self.parameters["AR"]
+                self.zweiffel = self.parameters["zweiffel"]
+                self.solidity = (2/self.zweiffel) * numpy.cos(s_out.mid.beta)**2 * (numpy.tan(s_in.mid.beta) - numpy.tan(s_out.mid.beta))
+                self.pitch = self.chord / self.solidity
+                self.NOB = numpy.ceil((2 * numpy.pi * s1.mid.radius) / self.pitch)
+                self.chord = self.h / self.AR
+                self.os = numpy.cos(s_in.mid.beta)
+                self.opening = self.os * self.pitch
+            case "compressor":
+                self.solidity = self.parameters["solidity"]
+                self.NOB = self.parameters["NOB"]
+                self.pitch = (2 * numpy.pi * s_in.mid.radius) / self.NOB
+                self.chord = self.pitch * self.solidity
+                self.zweiffel = (2/self.solidity) * numpy.cos(s_out.mid.beta)**2 * (numpy.tan(s_out.mid.beta) - numpy.tan(s_in.mid.beta))
+                self.AR = self.h / self.chord
+        self.stagger = self.get_stagger_angles(s_in, s_out, blade="rotor") #[(s1.triangles[radius_idx].beta + s2.triangles[radius_idx].beta) / 2 for radius_idx in range(self.stage.component.num_radii)]
+        self.cax = self.get_cax()
+        self.deflections = self.get_deflections(s_in, s_out)
         self.taper_ratio = self.cax[-1] / self.cax[0]
-        self.zweiffel = (2/self.solidity) * numpy.cos(s2.mid.beta)**2 * (numpy.tan(s2.mid.beta) - numpy.tan(s1.mid.beta))
         
-    def axial_compressor_stator(self):
-        # Axial Compressor Rotor 
-        s1 = self.stage.stations[1]
-        s2 = self.stage.stations[2]
-        s3 = self.stage.stations[3]
-        rh_avg = (s2.rhub + s3.rhub) / 2
-        rt_avg = (s2.rtip + s3.rtip) / 2
-        self.HT_ratio = rh_avg / rt_avg
-        self.h = rt_avg - rh_avg
-        self.pitch = (2 * numpy.pi * s2.mid.radius) / self.NOB
-        self.chord = self.pitch * self.solidity
-        self.AR = self.h / self.chord
-        self.stagger = [(s2.triangles[radius_idx].alpha + s3.triangles[radius_idx].alpha) / 2 for radius_idx in range(self.stage.component.num_radii)]
-        self.cax = [self.chord * numpy.cos(self.stagger[radius_idx]) for radius_idx in range(self.stage.component.num_radii)]
-        self.deflections = [s3.triangles[radius_idx].alpha - s2.triangles[radius_idx].alpha for radius_idx in range(self.stage.component.num_radii)]
-        self.taper_ratio = self.cax[-1] / self.cax[0]
-        self.zweiffel = (2/self.solidity) * numpy.cos(s3.mid.alpha)**2 * (numpy.tan(s3.mid.alpha) - numpy.tan(s2.mid.alpha))
+
+    def get_stagger_angles(self, station_inlet, station_outlet, blade:str):
+        s_in = station_inlet
+        s_out = station_outlet
+        match blade:
+            case "stator":
+                return [(s_in.triangles[radius_idx].alpha + s_out.triangles[radius_idx].alpha) / 2 for radius_idx in range(self.stage.component.num_radii)]
+            case "rotor":
+                return [(s_in.triangles[radius_idx].beta + s_out.triangles[radius_idx].beta) / 2 for radius_idx in range(self.stage.component.num_radii)]
+
+    def get_cax(self):
+        return [self.chord * numpy.cos(self.stagger[radius_idx]) for radius_idx in range(self.stage.component.num_radii)]
+
+    def get_deflections(self, station_inlet, station_outlet):
+        s_in = station_inlet
+        s_out = station_outlet
+        return [s_out.triangles[radius_idx].beta - s_in.triangles[radius_idx].beta for radius_idx in range(self.stage.component.num_radii)]
 
     def get_axial_coords(self):
         # This is for an axial blade (needs revision to distinguish between axial and radial blades)
@@ -1304,10 +1306,10 @@ class BladeGeometry:
                 z_coords.append(z_coords[radius_idx] + self.cax[radius_idx])
         return z_coords
 
-    def radial_compressor_rotor(self):
+    def radial_rotor(self):
         pass
 
-    def radial_compressor_stator(self):
+    def radial_stator(self):
         pass
 
 
@@ -1587,10 +1589,8 @@ class AxialStage:
             self.rotor_diffusions.append(self.get_diffusion(radius_idx, self.stations[1], self.stations[2], self.rotor.solidity))
             self.stator_diffusions.append(self.get_diffusion(radius_idx, self.stations[2], self.stations[3], self.stator.solidity))
 
-        # Flow Coefficients
-        self.phi = [self.stations[key].mid.V/self.stations[key].mid.U for key in self.stations]
-        
         # Performance Parameters
+        self.phi = self.stations[2].mid.V/self.stations[2].mid.U
         self.psi = self.delta_ht / self.stations[2].mid.U**2 
         self.ER = self.stations[3].Pt / self.stations[1].Pt
         self.power = self.stations[1].W * (self.stations[3].ht - self.stations[1].ht)
@@ -1598,6 +1598,10 @@ class AxialStage:
         self.delta_ht_actual = self.stations[2].mid.U**2 * self.psi / 1000
         self.work_split = self.delta_ht_actual * 1000 / self.component.delta_ht
         self.capacity = upstream.W * numpy.sqrt(upstream.Tt) / (upstream.Pt / 101.325)
+        if self.idx == 0:
+            self.running_work_split = self.work_split
+        else:
+            self.running_work_split = numpy.sum(numpy.array([stage.work_split for stage in self.component.stages]) + self.work_split)
 
         # Check Results
         valid_design = True
@@ -1742,11 +1746,12 @@ class AxialStage:
             "ER": self.ER, 
             "power (kW)": self.power/1000, 
             "self work split": self.work_split, 
-            "running work split": numpy.sum([stage.work_split for stage in self.component.stages]),
+            "running work split": self.running_work_split,
             "AN2": self.AN2, 
             "delta ht": self.delta_ht_actual, 
             "capacity": self.capacity,
-            "loading coefficient": self.psi
+            "loading coefficient": self.psi,
+            "flow coefficient": self.phi
             }
         geometry["stator NOB"] = numpy.full(3, self.stator.NOB)
         geometry["stator cax"] = numpy.full(3, self.stator.cax)
