@@ -1368,12 +1368,6 @@ class AxialStage:
             Rm1 = self.upstream.radii[-1]
             Vax1 = self.upstream.mid.Vax
 
-        # Stage Quantites
-        self.delta_ht = self.psi * (Rm3*self.omega)**2
-        self.power = self.upstream.W * self.delta_ht
-        self.work_split = self.delta_ht / self.component.delta_ht
-        self.capacity = self.upstream.W * numpy.sqrt(self.upstream.Tt) / (self.upstream.Pt / 101.325)
-
         # Meanline and Radial Calculations (Velocity Triangles)
         # Station 1
         W1 = self.upstream.W
@@ -1405,9 +1399,10 @@ class AxialStage:
         s3 = copy.deepcopy(s2)
         s3.idx = 3
         s3.omega = self.omega
-        s3.Tt = s2.Tt - self.delta_ht/s2.cp
+        self.design_delta_ht = self.psi * (Rm3*self.omega)**2
+        s3.Tt = s2.Tt - self.design_delta_ht/s2.cp
         s3.Pt = s2.Pt * (s3.Tt/s2.Tt)**(s3.gamma/(efficiency*(s3.gamma - 1)))
-        Vu3 = (Rm2*self.omega*Vu2 - self.delta_ht) / (Rm3*self.omega) # Euler Turbine Equation
+        Vu3 = (Rm2*self.omega*Vu2 - self.design_delta_ht) / (Rm3*self.omega) # Euler Turbine Equation
         alpha3 = numpy.atan(Vu3/Vax3)
         s3.mid = VelocityTriangle("station 3 mid", Rm3, self.omega, Vu3, Vax3, alpha3, flow="axial")
         s3.mid.set_station(s3)
@@ -1437,11 +1432,11 @@ class AxialStage:
             self.rotor_deflections.append(self.get_deflection("rotor", radius_idx, self.stations[2], self.stations[3]))
 
         # Performance Parameters
-        self.ER = self.stations[3].Pt / self.stations[1].Pt
+        self.ER = self.stations[1].Pt / self.stations[3].Pt
         self.power = self.stations[1].W * (self.stations[3].ht - self.stations[1].ht)
         self.AN2 = self.stations[2].area * self.component.rpm**2 / 1e6
-        self.delta_ht_actual = self.stations[2].mid.U**2 * self.psi / 1000
-        self.work_split = self.delta_ht_actual / self.component.delta_ht
+        self.delta_ht = (self.stations[1].ht - self.stations[3].ht) / 1000
+        self.work_split = self.delta_ht / (self.component.delta_ht/1000)
         self.capacity = self.upstream.W * numpy.sqrt(self.upstream.Tt) / (self.upstream.Pt / 101.325)
         if self.idx == 0:
             self.running_work_split = self.work_split
@@ -1452,6 +1447,7 @@ class AxialStage:
         self.solve_turbine_cooling()
 
         # Check Results
+        valid_design = True
         self.aerodynamics, self.thermo, self.geometry, self.performance = self.get_data()
         betas = list()
         for key in self.aerodynamics:
@@ -1465,12 +1461,18 @@ class AxialStage:
         if any(deflection > (130*numpy.pi/180) for deflection in self.rotor_deflections):
             valid_design = False
             self.component.write_log(f"Stage {self.idx}: One or more Rotor Deflections are greater than 130 degrees")
-        if any(abs(beta) < 72 for beta in betas):
+        if any(abs(beta) > 72 for beta in betas):
             valid_design = False
-            self.component.write_log(f"Stage {self.idx}: One or more Relative Flow Angles (Beta) are less than 72 degrees")
+            self.component.write_log(f"Stage {self.idx}: One or more Relative Flow Angles (Beta) are greater than 72 degrees")
         if self.stations[3].triangles[-1].Mrel > 1.4:
             valid_design = False
             self.component.write_log(f"Stage {self.idx}: Rotor tip Relative Mach Number exceeds 1.4")
+        if self.idx == 0 and self.AN2 > 20:
+            valid_design = False
+            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 40E6")
+        if self.idx > 0 and self.AN2 > 40:
+            valid_design = False
+            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 20E6")
         if valid_design == False:
             print("Design Error. Check log")
 
@@ -1642,6 +1644,12 @@ class AxialStage:
         if self.stations[2].triangles[-1].Mrel > 1.4:
             valid_design = False
             self.component.write_log(f"Stage {self.idx}: Rotor tip Relative Mach Number exceeds 1.4")
+        if self.idx == 0 and self.AN2 > 20:
+            valid_design = False
+            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 40E6")
+        if self.idx > 0 and self.AN2 > 40:
+            valid_design = False
+            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 20E6")
         if valid_design == False:
             print("Design Error. Check log")
 
@@ -1751,10 +1759,11 @@ class AxialStage:
             "self work split": self.work_split, 
             "running work split": self.running_work_split,
             "AN2": self.AN2, 
-            "delta ht": self.delta_ht_actual, 
+            "delta ht": self.delta_ht, 
             "capacity": self.capacity,
             "loading coefficient": self.psi,
-            "flow coefficient": self.phi
+            "flow coefficient": self.phi,
+            "RPM": self.component.rpm
             }
         match self.machine:
             case "compressor":
