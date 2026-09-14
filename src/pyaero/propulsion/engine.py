@@ -489,6 +489,7 @@ class Compressor:
                 geometry["rotor stagger"].extend(stage_geometry["rotor stagger"])
                 geometry["rotor solidity"].extend(stage_geometry["rotor solidity"])
                 geometry["axial spacing"].extend(stage_geometry["axial spacing"])
+                performance[stage.idx] = stage_performance
                 if "material" in self.component_parameters:
                     geometry["Wr"].extend(numpy.full(3, stage.Wr))
                     geometry["hr"].extend(numpy.full(3, stage.hr))
@@ -513,7 +514,6 @@ class Compressor:
                     raw_aero[radius_idx]["reaction"].extend(stage_aerodynamics[radius_idx]["reaction"])
                     checks[radius_idx]["diffusion"].extend(stage_checks[radius_idx]["diffusion"])
                     checks[radius_idx]["dehaller"].extend(stage_checks[radius_idx]["dehaller"])
-                performance[stage.idx] = stage_performance
             thermo = pandas.DataFrame(thermo).T
             geometry = pandas.DataFrame(geometry).T
             performance = pandas.DataFrame(performance)
@@ -780,7 +780,7 @@ class Burner:
 
 
 class Turbine:
-    def __init__(self, upstream, compressor, cycle_parameters=None, component_parameters=None):
+    def __init__(self, upstream, compressor=None, cycle_parameters=None, component_parameters=None):
         if cycle_parameters != None:
             # CYCLE ANALYSIS
             self.cycle_parameters = cycle_parameters
@@ -823,11 +823,13 @@ class Turbine:
         self.material = self.component_parameters["material"]
         self.rpm = self.component_parameters["rpm"] # Must ensure this matches the compressor rpm at each operating condition
         self.num_radii = self.component_parameters["number of radii"]
+        self.log_path = component_parameters["log path"]
         self.specification = self.component_parameters["specification"]
         self.ER = self.specification["ER"]
         self.power = self.specification["power"]
         self.delta_ht = self.power / self.specification["W"] * 1000
         self.stages = list()
+        open(self.log_path, "w").close()
         match flow:
             case "axial":
                 self.solve_axial()
@@ -948,18 +950,17 @@ class Turbine:
         if flags["data"]:
             velocity_keys = ["V", "Vax", "Vu", "W", "Wu", "U", "Mabs", "Mrel", "alpha", "beta", "T", "P", "reaction"]
             thermo_keys = ["mdot", "Tt", "T", "Pt", "P"]
-            geometry_keys = ["rm", "rt", "rh", "area", "stator NOB", "stator cax", "stator cm", "stator stagger", "rotor NOB", 
-                            "rotor cax", "rotor cm", "rotor stagger", "axial spacing"]
+            geometry_keys = ["rm", "rt", "rh", "area", "stator NOB", "stator cax", "stator cm", "stator stagger", "stator solidity", "rotor NOB", 
+                            "rotor cax", "rotor cm", "rotor stagger", "rotor solidity", "axial spacing"]
             if "material" in self.component_parameters:
                 geometry_keys.extend(["Wr", "hr", "Wdr", "Wd", "r_r", "bore radius"])
             raw_velocities = {radius_idx: {key: list() for key in velocity_keys} for radius_idx in range(self.num_radii)}
             thermo = {key: list() for key in thermo_keys}
             geometry = {key: list() for key in geometry_keys}
-            performance = {num: dict() for num in range(len(self.stages))}
+            performance = {radius_idx: dict() for radius_idx in range(len(self.stages))}
             for idx, stage in enumerate(self.stages):
                 # Stage Data
                 stage_velocities, stage_thermo, stage_geometry, stage_performance = stage.get_data()
-                performance[idx] = stage_performance
                 # Thermodynamics
                 thermo["mdot"].extend(stage_thermo["mdot"])
                 thermo["Tt"].extend(stage_thermo["Tt"])
@@ -982,6 +983,7 @@ class Turbine:
                 geometry["rotor stagger"].extend(stage_geometry["rotor stagger"])
                 geometry["rotor solidity"].extend(stage_geometry["rotor solidity"])
                 geometry["axial spacing"].extend(stage_geometry["axial spacing"])
+                performance[stage.idx] = stage_performance
                 if hasattr(stage, "centrifugal_stress"):
                     geometry["Wr"].extend(numpy.full(3, stage.Wr))
                     geometry["hr"].extend(numpy.full(3, stage.hr))
@@ -1006,7 +1008,7 @@ class Turbine:
                     raw_velocities[radius_idx]["reaction"].extend(stage_velocities[radius_idx]["reaction"])
             thermo = pandas.DataFrame(thermo).T
             geometry = pandas.DataFrame(geometry).T
-            performance = pandas.DataFrame(stage_performance)
+            performance = pandas.DataFrame(performance)
             structured_aero = pandas.DataFrame([])
             with pandas.ExcelWriter("turbine.xlsx") as writer:
                 # Write all station data for each radius (table of all properties for each radius)
@@ -1021,8 +1023,11 @@ class Turbine:
                     start_row += len(radius_data.index)
                 thermo.to_excel(writer, sheet_name="thermo", index=True)
                 geometry.to_excel(writer, sheet_name="geometry", index=True)
-                performance.to_excel(writer, sheet_name="performance", header=False, index=True)
+                performance.to_excel(writer, sheet_name="performance", header=[f"Stage {idx}" for idx in range(len(self.stages))], index=True)
 
+    def write_log(self, message):
+        with open(self.log_path, "a") as f:
+            f.write(message + "\n")
 
 # Velocity Triangle for axial turbomachines
 class VelocityTriangle:
@@ -1217,7 +1222,6 @@ class BladeGeometry:
                 self.AR = self.parameters["AR"]
                 self.zweiffel = self.parameters["zweiffel"]
                 self.chord = self.h / self.AR
-                self.taper_ratio = self.cax[-1] / self.cax[0]
                 self.solidity = (2/self.zweiffel) * numpy.cos(s_out.mid.alpha)**2 * (numpy.tan(s_out.mid.alpha) - numpy.tan(s_in.mid.alpha))
                 self.pitch = self.chord / self.solidity
                 self.NOB = numpy.ceil((2 * numpy.pi * s_in.mid.radius) / self.pitch)
@@ -1229,10 +1233,6 @@ class BladeGeometry:
                 self.pitch = (2 * numpy.pi * s_in.mid.radius) / self.NOB
                 self.chord = self.pitch * self.solidity
                 self.AR = self.h / self.chord
-                self.stagger = [(s_in.triangles[radius_idx].alpha + s_out.triangles[radius_idx].alpha) / 2 for radius_idx in range(self.stage.component.num_radii)]
-                self.cax = [self.chord * numpy.cos(self.stagger[radius_idx]) for radius_idx in range(self.stage.component.num_radii)]
-                self.deflections = [s_out.triangles[radius_idx].alpha - s_in.triangles[radius_idx].alpha for radius_idx in range(self.stage.component.num_radii)]
-                self.taper_ratio = self.cax[-1] / self.cax[0]
                 self.zweiffel = (2/self.solidity) * numpy.cos(s_out.mid.alpha)**2 * (numpy.tan(s_out.mid.alpha) - numpy.tan(s_in.mid.alpha))
         self.stagger = self.get_stagger_angles(s_in, s_out, blade="stator") #[(s1.triangles[radius_idx].beta + s2.triangles[radius_idx].beta) / 2 for radius_idx in range(self.stage.component.num_radii)]
         self.cax = self.get_cax()
@@ -1252,9 +1252,9 @@ class BladeGeometry:
                 self.AR = self.parameters["AR"]
                 self.zweiffel = self.parameters["zweiffel"]
                 self.solidity = (2/self.zweiffel) * numpy.cos(s_out.mid.beta)**2 * (numpy.tan(s_in.mid.beta) - numpy.tan(s_out.mid.beta))
+                self.chord = self.h / self.AR
                 self.pitch = self.chord / self.solidity
                 self.NOB = numpy.ceil((2 * numpy.pi * s1.mid.radius) / self.pitch)
-                self.chord = self.h / self.AR
                 self.os = numpy.cos(s_in.mid.beta)
                 self.opening = self.os * self.pitch
             case "compressor":
@@ -1337,8 +1337,8 @@ class AxialStage:
         self.num_radii = self.component_parameters["number of radii"]
         self.omega = self.component.rpm * (2*numpy.pi / 60)
         efficiency = self.component_parameters["specification"]["polytropic efficiency"]
-        phi = self.aerodynamics["flow coefficient"]
-        psi = self.aerodynamics["loading coefficient"]
+        self.phi = self.aerodynamics["flow coefficient"]
+        self.psi = self.aerodynamics["loading coefficient"]
         loss_coefficient = self.aerodynamics["loss coefficient"]
         M2m = self.aerodynamics["M2m"]
         U3m = self.aerodynamics["U3m"]
@@ -1357,7 +1357,7 @@ class AxialStage:
         # Radii & Axial Velocities
         Rm3 = U3m / self.omega
         Rm2 = Rm3 / Rm3_Rm2
-        Vax3 = U3m * phi
+        Vax3 = U3m * self.phi
         Vax2 = Vax3 / Vax3_Vax2
         if self.idx == 0:
             # First Stage
@@ -1369,9 +1369,9 @@ class AxialStage:
             Vax1 = self.upstream.mid.Vax
 
         # Stage Quantites
-        self.delta_ht = psi * (Rm3*self.omega)**2
+        self.delta_ht = self.psi * (Rm3*self.omega)**2
         self.power = self.upstream.W * self.delta_ht
-        self.work_split = self.delta_ht / self.turbine.delta_ht
+        self.work_split = self.delta_ht / self.component.delta_ht
         self.capacity = self.upstream.W * numpy.sqrt(self.upstream.Tt) / (self.upstream.Pt / 101.325)
 
         # Meanline and Radial Calculations (Velocity Triangles)
@@ -1425,9 +1425,9 @@ class AxialStage:
         self.axial_spacing = 1.5 * self.stator.cax[0]
 
         # Degrees of Reaction (DoR)
-        self.DoR = list()
+        self.DoRs = list()
         for radius_idx in range(self.num_radii):
-            self.DoR.append(self.get_DoR(radius_idx, machine="turbine"))
+            self.DoRs.append(self.get_DoR(radius_idx, machine="turbine"))
 
         # Deflections
         self.rotor_deflections = list()
@@ -1443,14 +1443,20 @@ class AxialStage:
         self.delta_ht_actual = self.stations[2].mid.U**2 * self.psi / 1000
         self.work_split = self.delta_ht_actual / self.component.delta_ht
         self.capacity = self.upstream.W * numpy.sqrt(self.upstream.Tt) / (self.upstream.Pt / 101.325)
+        if self.idx == 0:
+            self.running_work_split = self.work_split
+        else:
+            self.running_work_split = numpy.sum(numpy.array([stage.work_split for stage in self.component.stages]) + self.work_split)
 
         # Cooling
         self.solve_turbine_cooling()
 
         # Check Results
         self.aerodynamics, self.thermo, self.geometry, self.performance = self.get_data()
-        betas = [self.aerodynamics[key]["beta"] for key in self.aerodynamics]
-        if any(DoR < 0 for DoR in self.DoR):
+        betas = list()
+        for key in self.aerodynamics:
+            betas.extend(self.aerodynamics[key]["beta"])
+        if any(DoR < 0 for DoR in self.DoRs):
             print("Design Error. Check log")
             self.component.write_log(f"Stage {self.idx}: One or more Degree of Reactions are negative")
         if any(deflection > (130*numpy.pi/180) for deflection in self.stator_deflections):
@@ -1741,7 +1747,6 @@ class AxialStage:
         thermo = {key: list() for key in ["mdot", "Tt", "T", "Pt", "P"]}
         geometry = {key: list() for key in ["rm", "rt", "rh", "area", "stator NOB", "stator cax", "stator cm", "stator stagger", "stator solidity", "rotor NOB", "rotor cax", "rotor cm", "rotor stagger", "rotor solidity", "axial spacing"]}
         performance = {
-            "PR": self.PR, 
             "power (kW)": self.power/1000, 
             "self work split": self.work_split, 
             "running work split": self.running_work_split,
@@ -1751,6 +1756,11 @@ class AxialStage:
             "loading coefficient": self.psi,
             "flow coefficient": self.phi
             }
+        match self.machine:
+            case "compressor":
+                performance["PR"] = self.PR
+            case "turbine":
+                performance["ER"] = self.ER
         geometry["stator NOB"] = numpy.full(3, self.stator.NOB)
         geometry["stator cax"] = numpy.full(3, self.stator.cax)
         geometry["stator cm"] = numpy.full(3, self.stator.chord)
@@ -2317,7 +2327,7 @@ class Engine:
         self.ambient = Ambient(self.altitude, Minf=self.Minf)
 
         # Handle user errors in engine parameters
-        if "log_path" in engine_parameters:
+        if "log path" in engine_parameters:
             self.log_path = engine_parameters["log path"]
         else:
             raise ValueError("Must include log filepath in engine parameters.")
@@ -2431,9 +2441,38 @@ class Engine:
 
 
     # Retrieve flow properties at every station
-    def write_station_data(self, filename): 
+    def write_performance(self, filename): 
+        # Performance Parameters
+        station_data = self.get_station_data()
+        W = station_data["W [kg/sec]"].values
+        V = station_data["V [m/sec]"].values
+        P = station_data["Ps [kPa]"].values
+        A = station_data["Area [m^2]"].values
+        Wf_in = self.burner.exit.Wf
+        pressure_thrust = A[-1] * ((P[-1]*1000) - self.ambient.P)
+        pressure_power = pressure_thrust * V[-1]
+        # Thrust
+        thrust = V[-1]*W[-1] - V[0]*W[0] + A[-1] * ((P[-1]*1000) - self.ambient.P)
+        # Specific Thrust
+        T_ma = thrust / W[0]
+        # Thrust Specific Fuel Consumption (TSFC)
+        TSFC = (self.burner.exit.Wf / thrust) * 10**6
+        # Propulsive Efficiency
+        eta_p = thrust*V[0] / (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) 
+        # Thermal Efficiency
+        eta_th = (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) / (Wf_in*self.LHV) 
+        # Overall Efficiency
+        eta_o = eta_p * eta_th 
+        performance = pandas.DataFrame({
+                                         "Specific Thrust [m/sec]": T_ma,
+                                         "TSFC [g/(sec*kN)]": TSFC,
+                                         "Thrust [N]": thrust,
+                                         "Propulsive Efficiency": eta_p,
+                                         "Thermal Efficiency": eta_th,
+                                         "Overall Efficiency": eta_o
+                                        }, index=[0])
+        # Station Data
         raw_data = list()
-        # Handle Recuperator station data (afterburner is treated like the other components)
         if "recuperator" in self.parameters:
             for component in self.components:
                 if isinstance(component, Inlet):
@@ -2458,7 +2497,9 @@ class Engine:
                     
         rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
         station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
-        station_data.to_excel(filename, index=False)
+        with pandas.ExcelWriter(filename) as writer:
+            station_data.to_excel(writer, sheet_name="cycle", index=False)
+            performance.to_excel(writer, sheet_name="performance", index=False)
 
 
     # Plot the temperatures and pressures throughout the whole engine
@@ -2488,40 +2529,6 @@ class Engine:
         plt.tight_layout()
         plt.show()
 
-
-    # Display the full engine performance
-    def get_performance(self):
-        """ Performance Parameters """
-        station_data = self.get_station_data()
-        W = station_data["W [kg/sec]"].values
-        V = station_data["V [m/sec]"].values
-        P = station_data["Ps [kPa]"].values
-        A = station_data["Area [m^2]"].values
-        FAR = station_data["FAR"].values
-        Wf_in = self.burner.exit.Wf
-        pressure_thrust = A[-1] * ((P[-1]*1000) - self.ambient.P)
-        pressure_power = pressure_thrust * V[-1]
-        # Thrust
-        thrust = V[-1]*W[-1] - V[0]*W[0] + A[-1] * ((P[-1]*1000) - self.ambient.P)
-        # Specific Thrust
-        T_ma = thrust / W[0]
-        # Thrust Specific Fuel Consumption (TSFC)
-        TSFC = (self.burner.exit.Wf / thrust) * 10**6
-        # Propulsive Efficiency
-        eta_p = thrust*V[0] / (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) 
-        # Thermal Efficiency
-        eta_th = (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) / (Wf_in*self.LHV) 
-        # Overall Efficiency
-        eta_o = eta_p * eta_th 
-        performance = pandas.DataFrame({
-                                         "Specific Thrust [m/sec]": T_ma,
-                                         "TSFC [g/(sec*kN)]": TSFC,
-                                         "Thrust [N]": thrust,
-                                         "Propulsive Efficiency": eta_p,
-                                         "Thermal Efficiency": eta_th,
-                                         "Overall Efficiency": eta_o
-                                        }, index=[0])
-        return performance
 
     def get_specifications(self):
         specifications = dict()
