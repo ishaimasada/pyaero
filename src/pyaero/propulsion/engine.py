@@ -454,7 +454,7 @@ class Compressor:
         if flags["data"]:
             velocity_keys = ["V", "Vax", "Vu", "W", "Wu", "U", "Mabs", "Mrel", "alpha", "beta", "T", "P", "reaction"]
             thermo_keys = ["mdot", "Tt", "T", "Pt", "P"]
-            checks_keys = ["diffusion", "dehaller"]
+            checks_keys = ["rotor diffusion", "stator diffusion", "rotor dehaller", "stator dehaller"]
             single_geometry_keys = ["rh", "rm", "rt", "area", "stator NOB", "stator solidity", "stator h", "stator H/T", "stator cm", "rotor NOB", "rotor solidity", "rotor h", "rotor H/T", "rotor cm", "axial spacing"]
             radius_geometry_keys = ["stator cax", "stator stagger", "rotor cax", "rotor stagger"]
             raw_aero = {radius_idx: {key: list() for key in velocity_keys} for radius_idx in range(self.num_radii)}
@@ -514,8 +514,10 @@ class Compressor:
                     raw_aero[radius_idx]["T"].extend(stage_aerodynamics[radius_idx]["T"])
                     raw_aero[radius_idx]["P"].extend(stage_aerodynamics[radius_idx]["P"])
                     raw_aero[radius_idx]["reaction"].extend(stage_aerodynamics[radius_idx]["reaction"])
-                    checks[radius_idx]["diffusion"].extend(stage_checks[radius_idx]["diffusion"])
-                    checks[radius_idx]["dehaller"].extend(stage_checks[radius_idx]["dehaller"])
+                    checks[radius_idx]["rotor diffusion"].append(stage_checks[radius_idx]["rotor diffusion"])
+                    checks[radius_idx]["stator diffusion"].append(stage_checks[radius_idx]["stator diffusion"])
+                    checks[radius_idx]["rotor dehaller"].append(stage_checks[radius_idx]["rotor dehaller"])
+                    checks[radius_idx]["stator dehaller"].append(stage_checks[radius_idx]["stator dehaller"])
                     geometry["radius"][radius_idx]["stator stagger"].extend(stage_geometry["radius"][radius_idx]["stator stagger"])
                     geometry["radius"][radius_idx]["stator cax"].extend(stage_geometry["radius"][radius_idx]["stator cax"])
                     geometry["radius"][radius_idx]["rotor cax"].extend(stage_geometry["radius"][radius_idx]["rotor cax"])
@@ -539,7 +541,9 @@ class Compressor:
                 for radius_idx in range(self.num_radii):
                     radius_data = pandas.DataFrame(checks[radius_idx]).T
                     radius_data.insert(0, f"radius {radius_idx}", checks_keys)
-                    radius_data.to_excel(writer, sheet_name="checks", startrow=start_row, index=False)
+                    header = [f"Stage {idx+1}" for idx in range(len(self.stages))]
+                    header.insert(0, f"Radius {radius_idx+1}")
+                    radius_data.to_excel(writer, sheet_name="checks", header=header, startrow=start_row, index=False)
                     start_row += len(radius_data) + 3
                 thermo.to_excel(writer, sheet_name="thermo", index=True)
                 performance.to_excel(writer, sheet_name="performance", header=[f"Stage {idx}" for idx in range(len(self.stages))], index=True)
@@ -859,9 +863,6 @@ class Turbine:
                 gamma = self.specification["gamma"]
                 Cp = self.specification["Cp"]
                 FAR = self.specification["FAR"]
-                #mid_radius = self.component_parameters["stages"][0]["U3m"] * self.omega
-                #Vu = self.component_parameters["stages"][0]["Vu1m"]
-                #mid = VelocityTriangle(label="0.5", radius=mid_radius, omega=self.omega, Vu=Vu, Vax, alpha, station=None, Mabs=None, Mrel=None)
                 parameters["upstream"] = Station(W, Tt, Pt, FAR=FAR)
             else:
                 # Subsequent stages
@@ -1304,16 +1305,14 @@ class AxialStage:
             self.rotor_deflections.append(self.get_deflection("rotor", radius_idx, self.stations[2], self.stations[3]))
 
         # Performance Parameters
-        self.ER = self.stations[1].Pt / self.stations[3].Pt
         self.power = self.stations[1].W * (self.stations[3].ht - self.stations[1].ht)
         self.AN2 = self.stations[2].area * self.component.rpm**2 / 1e6
         self.delta_ht = (self.stations[1].ht - self.stations[3].ht) / 1000
+        self.ER = self.stations[1].Pt / self.stations[3].Pt
+        self.running_ER = numpy.prod(numpy.append(numpy.array([stage.ER for stage in self.component.stages]), self.ER))
         self.work_split = self.delta_ht / (self.component.delta_ht/1000)
+        self.running_work_split = numpy.prod(numpy.append(numpy.array([stage.work_split for stage in self.component.stages]), self.work_split))
         self.capacity = self.upstream.W * numpy.sqrt(self.upstream.Tt) / (self.upstream.Pt / 101.325)
-        if self.idx == 0:
-            self.running_work_split = self.work_split
-        else:
-            self.running_work_split = numpy.sum(numpy.array([stage.work_split for stage in self.component.stages]) + self.work_split)
 
         # Cooling
         self.solve_turbine_cooling()
@@ -1341,10 +1340,10 @@ class AxialStage:
             self.component.write_log(f"Stage {self.idx}: Rotor tip Relative Mach Number exceeds 1.4")
         if self.idx == 0 and self.AN2 > 20:
             valid_design = False
-            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 40E6")
+            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 20E6")
         if self.idx > 0 and self.AN2 > 40:
             valid_design = False
-            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 20E6")
+            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 40E6")
         if valid_design == False:
             print("Design Error. Check log")
 
@@ -1458,8 +1457,8 @@ class AxialStage:
         self.rotor_dehallers = list()
         self.stator_dehallers = list()
         for radius_idx in range(self.component.num_radii):
-            self.rotor_dehallers.append(self.get_dehaller(radius_idx, self.stations[1], self.stations[2]))
-            self.stator_dehallers.append(self.get_dehaller(radius_idx, self.stations[2], self.stations[3]))
+            self.rotor_dehallers.append(self.get_dehaller(radius_idx, "rotor"))
+            self.stator_dehallers.append(self.get_dehaller(radius_idx, "stator"))
 
         # Diffusion Numbers
         self.rotor_diffusions = list()
@@ -1469,18 +1468,15 @@ class AxialStage:
             self.stator_diffusions.append(self.get_diffusion(radius_idx, "stator"))
 
         # Performance Parameters
-        self.phi = self.stations[2].mid.V/self.stations[2].mid.U
+        self.phi = self.stations[2].mid.Vax / self.stations[2].mid.U
         self.psi = self.delta_ht / self.stations[2].mid.U**2 
-        self.PR = self.stations[3].Pt / self.stations[1].Pt
         self.power = self.stations[1].W * (self.stations[3].ht - self.stations[1].ht)
         self.AN2 = self.stations[2].area * self.component.rpm**2 / 1e6
-        self.delta_ht_actual = self.stations[2].mid.U**2 * self.psi / 1000
-        self.work_split = self.delta_ht_actual * 1000 / self.component.delta_ht
+        self.PR = self.stations[3].Pt / self.stations[1].Pt
+        self.running_PR = numpy.prod(numpy.append(numpy.array([stage.PR for stage in self.component.stages]), self.PR))
+        self.work_split = self.delta_ht / self.component.delta_ht
+        self.running_work_split = numpy.sum(numpy.append(numpy.array([stage.work_split for stage in self.component.stages]), self.work_split))
         self.capacity = upstream.W * numpy.sqrt(upstream.Tt) / (upstream.Pt / 101.325)
-        if self.idx == 0:
-            self.running_work_split = self.work_split
-        else:
-            self.running_work_split = numpy.sum(numpy.array([stage.work_split for stage in self.component.stages]) + self.work_split)
 
         # Check Results
         valid_design = True
@@ -1496,6 +1492,12 @@ class AxialStage:
         if any(abs(beta) > 68 for beta in betas):
             valid_design = False
             self.component.write_log(f"Stage {self.idx}: One or more Relative Flow Angle (Beta) magnitudes exceed 68 degrees")
+        if self.psi < 0.2 or self.psi > 0.65:
+            valid_design = False
+            self.component.write_log(f"Stage {self.idx}: Loading Coefficient out of bounds (0.2 to 0.65)")
+        if self.phi < 0.4 or self.phi > 0.6:
+            valid_design = False
+            self.component.write_log(f"Stage {self.idx}: Flow Coefficient out of bounds (0.4 to 0.6)")
         if any(DoR < 0 or DoR > 1 for DoR in self.DoRs):
             valid_design = False
             self.component.write_log(f"Stage {self.idx}: One or more Degree of Reactions are not between 0 and 1")
@@ -1522,10 +1524,10 @@ class AxialStage:
             self.component.write_log(f"Stage {self.idx}: Rotor tip Relative Mach Number exceeds 1.4")
         if self.idx == 0 and self.AN2 > 20:
             valid_design = False
-            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 40E6")
+            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 20E6")
         if self.idx > 0 and self.AN2 > 40:
             valid_design = False
-            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 20E6")
+            self.component.write_log(f"Stage {self.idx}: AN^2 exceeds 40E6")
         if valid_design == False:
             print("Design Error. Check log")
 
@@ -1603,10 +1605,16 @@ class AxialStage:
                 deflection = tri_exit.alpha - tri_in.alpha
         return deflection
 
-    def get_dehaller(self, radius_idx, station_inlet, station_exit):
-        tri_in = station_inlet.triangles[radius_idx]
-        tri_exit = station_exit.triangles[radius_idx]
-        dehaller = tri_exit.W / tri_in.W
+    def get_dehaller(self, radius_idx, blade:str):
+        match blade:
+            case "rotor":
+                tri_in = self.stations[1].triangles[radius_idx]
+                tri_exit = self.stations[2].triangles[radius_idx]
+                dehaller = tri_exit.W / tri_in.W
+            case "stator":
+                tri_in = self.stations[2].triangles[radius_idx]
+                tri_exit = self.stations[3].triangles[radius_idx]
+                dehaller = tri_exit.V / tri_in.V
         return dehaller
 
 
@@ -1654,9 +1662,11 @@ class AxialStage:
             }
         match self.machine:
             case "compressor":
-                performance["PR"] = self.PR
+                performance["self PR"] = self.PR
+                performance["running PR"] = self.running_PR
             case "turbine":
-                performance["ER"] = self.ER
+                performance["self ER"] = self.ER
+                performance["running ER"] = self.running_ER
         for station in self.stations.values():
             thermo["mdot"].append(station.W)
             thermo["Tt"].append(station.Tt)
@@ -1697,10 +1707,12 @@ class AxialStage:
                 geometry["radius"][radius_idx]["rotor cax"].append(self.rotor.cax[radius_idx])
                 geometry["radius"][radius_idx]["rotor stagger"].append(numpy.rad2deg(self.rotor.stagger[radius_idx]))
         if self.machine == "compressor":
-            checks = {radius_idx: {key: list() for key in ["dehaller", "diffusion"]} for radius_idx in range(self.num_radii)}
+            checks = {radius_idx: {key: list() for key in ["rotor dehaller", "stator dehaller", "rotor diffusion", "stator diffusion"]} for radius_idx in range(self.num_radii)}
             for radius_idx in range(self.num_radii):
-                checks[radius_idx]["diffusion"] = [self.rotor_diffusions[radius_idx], self.stator_diffusions[radius_idx]]
-                checks[radius_idx]["dehaller"] = [self.rotor_dehallers[radius_idx], self.stator_dehallers[radius_idx]]
+                checks[radius_idx]["rotor diffusion"] = self.rotor_diffusions[radius_idx]
+                checks[radius_idx]["stator diffusion"] = self.stator_diffusions[radius_idx]
+                checks[radius_idx]["rotor dehaller"] = self.rotor_dehallers[radius_idx]
+                checks[radius_idx]["stator dehaller"] = self.stator_dehallers[radius_idx]
             return aerodynamics, thermo, geometry, performance, checks
         return aerodynamics, thermo, geometry, performance
 
@@ -1746,10 +1758,10 @@ class BladeGeometry:
                             match self.blade.lower():
                                 case "rotor":
                                     # RADIAL COMPRESSOR ROTOR 
-                                    self.radial_compressor_rotor()
+                                    self.radial_rotor()
                                 case "stator":
                                     # RADIAL COMPRESSOR STATOR 
-                                    self.radial_compressor_stator()
+                                    self.radial_stator()
 
 
     def axial_stator(self, station_inlet, station_outlet):
