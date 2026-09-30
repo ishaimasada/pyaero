@@ -618,9 +618,8 @@ class Burner:
         elif hasattr(self.engine, "Wf"):
             self.exit.Wf = self.engine.Wf
             FAR = self.exit.Wf / upstream.W
-            self.exit.ht = self.inlet.ht - (self.engine.compressors[0].exit.ht - self.engine.compressors[0].inlet.ht)
-            TET = bisection(Burner.get_FAR, FAR, 1800, 100, "increasing", self.inlet.Tt, FAR, self.LHV, self.eta_b, self)
-            self.engine.TET = TET
+            exit_ht = self.inlet.ht + (FAR * self.eta_b * self.LHV)
+            TET = self.exit.T_from_H(exit_ht, FAR, 1800, 100)
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
         self.exit.Pt = self.inlet.Pt * (1 - self.Ptloss_b)
         self.exit.Tt = TET
