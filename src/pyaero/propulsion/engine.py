@@ -11,7 +11,6 @@ parent_directory = "\\".join(directory.split("\\")[:-1])
 
 from pyaero.aerodynamics.compressible import bisection, isentropic, get_Tt_Ttstar 
 from pyaero.aerodynamics.atmosphere import Ambient 
-#from curves import *
 os.chdir(directory)
 
 
@@ -157,13 +156,11 @@ class Station:
         h_lo = self.get_ht(Tlo, FAR)
         h_hi = self.get_ht(Thi, FAR)
         if not (h_lo <= h <= h_hi or h_hi <= h <= h_lo): raise ValueError("Bisection bounds do not bracket the solution")
-
         # Initial calculation of hmid to prevent uninitialized use
         Tmid = (Thi + Tlo) / 2
         hmid = self.get_ht(Tmid, FAR)
         error = abs(hmid - h) / h
         iterations = 0
-        
         # Perform bisection
         while error > 0.001:
             Tmid = (Thi + Tlo) / 2
@@ -617,7 +614,7 @@ class Burner:
             self.exit.Wf = self.inlet.W * FAR
         elif hasattr(self.engine, "Wf"):
             self.exit.Wf = self.engine.Wf
-            FAR = self.exit.Wf / upstream.W
+            FAR = self.exit.Wf / self.inlet.W
             exit_ht = self.inlet.ht + (FAR * self.eta_b * self.LHV)
             TET = self.exit.T_from_H(exit_ht, FAR, 1800, 100)
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
@@ -834,6 +831,7 @@ class Turbine:
         flow = self.component_parameters["flow"]
         self.material = self.component_parameters["material"]
         self.rpm = self.component_parameters["rpm"] # Must ensure this matches the compressor rpm at each operating condition
+        self.omega = self.rpm * 2 * numpy.pi / 60
         self.num_radii = self.component_parameters["number of radii"]
         self.log_path = component_parameters["log path"]
         self.specification = self.component_parameters["specification"]
@@ -867,40 +865,10 @@ class Turbine:
                 # Subsequent stages
                 parameters["upstream"] = self.stages[idx - 1].stations[3]
             self.stages.append(AxialStage(idx, "turbine", self))
-        # Structural Analysis
-        if "material" in self.component_parameters:
-            self.material = self.component_parameters["material"]
-            self.solve_structural()
 
     def solve_radial(self):
         return
 
-    def solve_structural(self):
-        for idx, stage in enumerate(self.stages):
-            self.material = self.component_parameters["material"]
-            stage.bore_radius = self.component_parameters["stages"][idx]["geometry"]["bore radius"]
-            design_stress = self.material["design stress"] * 10**6 # Pa
-            density = self.material["density"]
-            root_area = self.component_parameters["stages"][idx]["geometry"]["root area"]
-            y = self.material["y"]
-            x = self.material["x"]
-            Ah = root_area * 10**-6  # m^2
-            # Calculate AN2, capacity, time til fracture, and centrifugal stress
-            cmsx4_polynomial = numpy.polyfit(x, y, 3)
-            stage.capacity = stage.stations[1].W * numpy.sqrt(stage.stations[1].Tt) / (stage.stations[1].Pt / 101.325)
-            stage.AN2 = stage.stations[3].area * self.rpm**2 / 1e6 
-            stage.centrifugal_stress = stage.AN2 * (density * numpy.pi / 3600) * ( 1 + stage.rotor.taper_ratio) # At blade root
-            get_LMP = lambda x: numpy.polyval(cmsx4_polynomial, x)
-            stage.LMP = get_LMP(stage.centrifugal_stress/10**6)
-            stage.time_to_fracture = 10**(stage.LMP*(1000/stage.stations[1].Tt) - 20) / 3600 # hrs
-            # Rotor Disk
-            stage.Wr = 1.25 * stage.rotor.cax[0]
-            stage.hr = copy.deepcopy(stage.Wr)
-            stage.r_r = stage.stations[1].rhub - stage.hr
-            stage.rim_blade_stress = (stage.centrifugal_stress *10**6 * stage.rotor.NOB * Ah) / (2 * numpy.pi * stage.stations[1].rhub * stage.Wr)
-            stage.Wdr = stage.Wr * (stage.hr/stage.r_r) * ((stage.rim_blade_stress/design_stress)*(1 + (stage.r_r/stage.hr)) + (density*stage.omega**2*stage.r_r**2)/(2*design_stress) * (1 + (stage.hr/(2*stage.r_r))) - 1)
-            stage.Wd = stage.Wdr * numpy.exp((density*(stage.omega*stage.r_r)**2)/(2*design_stress) * (1 - (stage.bore_radius/stage.r_r)**2))
-            stage.torsional_stress = self.power / (2 * numpy.pi * stage.stations[1].rhub**2 * stage.Wd * stage.omega)
 
     # Cycle method for performing preliminary component design ("specification" portion of the component design parameters)
     # Only call this after performing cycle analysis, NOT component design
@@ -962,7 +930,7 @@ class Turbine:
             single_geometry_keys = ["rh", "rm", "rt", "area", "stator NOB", "stator solidity", "stator h", "stator H/T", "stator cm", "rotor NOB", "rotor solidity", "rotor h", "rotor H/T", "rotor cm", "axial spacing"]
             radius_geometry_keys = ["stator cax", "stator stagger", "rotor cax", "rotor stagger"]
             if "material" in self.component_parameters:
-                single_geometry_keys.extend(["Wr", "hr", "Wdr", "Wd", "r_r", "bore radius"])
+                single_geometry_keys.extend(["Wr", "hr", "Wdr", "Wds", "r_r", "inner radius"])
             geometry = {
                 "radius": {radius_idx: {key: list() for key in radius_geometry_keys} for radius_idx in range(self.num_radii)},
                 "single": {key: list() for key in single_geometry_keys}}
@@ -999,9 +967,9 @@ class Turbine:
                     geometry["single"]["Wr"].extend(numpy.full(3, stage.Wr))
                     geometry["single"]["hr"].extend(numpy.full(3, stage.hr))
                     geometry["single"]["Wdr"].extend(numpy.full(3, stage.Wdr))
-                    geometry["single"]["Wd"].extend(numpy.full(3, stage.Wd))
+                    geometry["single"]["Wds"].extend(numpy.full(3, stage.Wds))
                     geometry["single"]["r_r"].extend(numpy.full(3, stage.r_r))
-                    geometry["single"]["bore radius"].extend(numpy.full(3, stage.bore_radius))
+                    geometry["single"]["inner radius"].extend(numpy.full(3, stage.inner_radius))
                 # Velocities
                 for radius_idx in range(stage.num_radii):
                     raw_velocities[radius_idx]["V"].extend(stage_velocities[radius_idx]["V"])
@@ -1199,6 +1167,10 @@ class AxialStage:
                 # AXIAL COMPRESSOR
                 self.stage_parameters = self.component_parameters["stages"][idx]
                 self.solve_compressor()
+        # Structural Analysis
+        if "material" in self.component_parameters:
+            self.material = self.component_parameters["material"]
+            self.solve_structural()
 
     def solve_turbine(self):
         # Load in stage parameters
@@ -1286,9 +1258,10 @@ class AxialStage:
         # Store stations in dictionary object
         self.stations = {1: s1, 2: s2, 3: s3}
 
-        # Blade Geometries
+        # Blade Geometry & Cooling
         self.stator = BladeGeometry(machine="turbine", flow="axial", stage=self, blade="stator", parameters={"AR": AR_stator, "zweiffel": zweiffel})
         self.rotor = BladeGeometry(machine="turbine", flow="axial", stage=self, blade="rotor", parameters={"AR": AR_rotor, "zweiffel": zweiffel})
+        self.total_mdot_cool = self.stator.mdot_cool + self.rotor.mdot_cool # Total Stage Cooling
         self.axial_spacing = 1.5 * self.stator.cax[0]
 
         # Degrees of Reaction (DoR)
@@ -1303,7 +1276,7 @@ class AxialStage:
             self.stator_deflections.append(self.get_deflection("stator", radius_idx, self.stations[1], self.stations[2]))
             self.rotor_deflections.append(self.get_deflection("rotor", radius_idx, self.stations[2], self.stations[3]))
 
-        # Performance Parameters
+        # Performance 
         self.power = self.stations[1].W * (self.stations[3].ht - self.stations[1].ht)
         self.AN2 = self.stations[2].area * self.component.rpm**2 / 1e6
         self.delta_ht = (self.stations[1].ht - self.stations[3].ht) / 1000
@@ -1312,9 +1285,6 @@ class AxialStage:
         self.work_split = self.delta_ht / (self.component.delta_ht/1000)
         self.running_work_split = numpy.prod(numpy.append(numpy.array([stage.work_split for stage in self.component.stages]), self.work_split))
         self.capacity = self.upstream.W * numpy.sqrt(self.upstream.Tt) / (self.upstream.Pt / 101.325)
-
-        # Cooling
-        self.solve_turbine_cooling()
 
         # Check Results
         valid_design = True
@@ -1531,54 +1501,115 @@ class AxialStage:
             print("Design Error. Check log")
 
 
-    def solve_turbine_cooling(self):
-        s1 = self.stations[1]
-        s2 = self.stations[2]
-        s3 = self.stations[3]
-        OTDF = self.cooling["OTDF"]
-        RTDF = self.cooling["RTDF"]
-        CDT = self.cooling["CDT"]
-        cp_coolant = self.cooling["cp coolant"]
-        metal_TtMax = self.cooling["metal TtMax"]
-        cooling_efficiency = self.cooling["cooling efficiency"]
-        # STATOR
-        # Peak gas temperature seen by stator (using Inlet Total Temp)
-        T_peak_S = OTDF * (s1.Tt - CDT) + s1.Tt
-        # Corrected temperature based on recovery factor (0.15 logic from original)
-        T_peak_S_corr = T_peak_S - 0.15 * (s2.mid.V)**2 / (2 * cp_coolant)
-        # Required cooling effectiveness
-        eps_req_S = (T_peak_S_corr - metal_TtMax) / (T_peak_S_corr - CDT)
-        # Non-dimensional coolant parameter
-        K_cool_S = eps_req_S / (cooling_efficiency * (1 - eps_req_S))
-        # Heat Transfer: Stator
-        Area_S = 2 * self.stator.chord * self.stator.h * self.stator.NOB
-        mu_S = 1.458e-6 * T_peak_S_corr**(3/2) / (T_peak_S_corr + 110.4)
-        Re_S = (s1.rho * s1.mid.V * self.stator.chord) / mu_S
-        k_S = 0.000053983 * T_peak_S_corr + 0.013568
-        Nu_S = 0.488 * Re_S**0.592
-        h_conv_S = Nu_S * k_S / self.stator.chord
-        # Resulting Stator Coolant Flow
-        self.stator.mdot_cool = K_cool_S * h_conv_S * Area_S / cp_coolant
-        # ROTOR
-        # Peak gas temperature seen by rotor (using RTDF)
-        T_peak_R = RTDF * (s1.Tt - CDT) + s1.Tt
-        # Corrected temperature based on relative velocity (W) for the rotor
-        T_peak_R_corr = T_peak_R - 0.15 * (s2.mid.W)**2 / (2 * cp_coolant)
-        # Required cooling effectiveness
-        eps_req_R = (T_peak_R_corr - metal_TtMax) / (T_peak_R_corr - CDT)
-        # Non-dimensional coolant parameter
-        K_cool_R = eps_req_R / (cooling_efficiency * (1 - eps_req_R))
-        # Heat Transfer: Rotor
-        Area_R = 2 * self.rotor.chord * self.rotor.h * self.rotor.NOB
-        mu_R = 1.458e-6 * T_peak_R_corr**(3/2) / (T_peak_R_corr + 110.4)
-        Re_R = (s2.rho * s2.mid.W * self.rotor.chord) / mu_R
-        k_R = 0.000053983 * T_peak_R_corr + 0.013568
-        Nu_R = 0.488 * Re_R**0.592
-        h_conv_R = Nu_R * k_R / self.rotor.chord
-        # Resulting Rotor Coolant Flow
-        self.rotor.mdot_cool = K_cool_R * h_conv_R * Area_R / cp_coolant
-        # Total Stage Cooling
-        self.total_mdot_cool = self.stator.mdot_cool + self.rotor.mdot_cool
+    def solve_structural(self):
+        match self.machine.lower():
+            case "turbine":
+                s_in = self.stations[2]
+                s_out = self.stations[3]
+                Pref = self.component_parameters["stages"][self.idx]["cooling"]["packing pressure"]
+                Tref = self.component_parameters["stages"][self.idx]["cooling"]["packing temperature"]
+            case "compressor":
+                s_in = self.stations[1]
+                s_out = self.stations[2]
+        # Read material properties
+        self.bore_width = self.component_parameters["stages"][self.idx]["geometry"]["bore width"]
+        self.shaft_radius = self.component_parameters["stages"][self.idx]["geometry"]["shaft radius"]
+        self.inner_radius = self.shaft_radius - self.component_parameters["stages"][self.idx]["geometry"]["hub thickness"]
+        root_area = self.component_parameters["stages"][self.idx]["geometry"]["root area"]
+        self.material = self.component_parameters["material"]
+        design_stress = self.material["design stress"] * 10**6 # Pa
+        density = self.material["density"]
+        k = self.material["conductivity"]
+        nu = self.material["poisson ratio"]
+        y = self.material["y"]
+        x = self.material["x"]
+        Ah = root_area * 10**-6 
+        # AN2, capacity, centrifugal stress, and time until fracture
+        get_LMP = lambda stress: numpy.polyval(numpy.polyfit(x, y, 3), stress) 
+        self.capacity = self.stations[1].W * numpy.sqrt(self.stations[1].Tt) / (self.stations[1].Pt / 101.325)
+        self.centrifugal_stress = self.AN2 * (density * numpy.pi / 3600) * ( 1 + self.rotor.taper_ratio) # At blade root
+        self.LMP = get_LMP(self.centrifugal_stress/10**6)
+        self.time_to_fracture = 10**(self.LMP*(1000/self.stations[1].Tt) - 20) / 3600 # hrs
+        # Rotor Disk Design (Equations from Mattingly's "Aircraft Engine Design")
+        self.Wr = 1.25 * self.rotor.cax[0]
+        self.hr = copy.deepcopy(self.Wr)
+        self.r_r = self.stations[1].rhub - self.hr
+        self.rim_stress = (self.centrifugal_stress *10**6 * self.rotor.NOB * Ah) / (2 * numpy.pi * self.stations[1].rhub * self.Wr)
+        self.Wdr = self.Wr * (self.hr/self.r_r) * ((self.rim_stress/design_stress)*(1 + (self.r_r/self.hr)) + (density*self.omega**2*self.r_r**2)/(2*design_stress) * (1 + (self.hr/(2*self.r_r))) - 1)
+        self.Wds = self.Wdr * numpy.exp((density*(self.omega*self.r_r)**2)/(2*design_stress) * (1 - (self.shaft_radius/self.r_r)**2))
+        self.torsional_stress = self.power / (2 * numpy.pi * self.stations[1].rhub**2 * self.Wds * self.omega)
+        if self.machine.lower() == "turbine":
+            # Thermal Analysis
+            tolerance = 1e-4
+            Wmean = (self.Wds + self.Wdr) / 2
+            rmean = (self.r_r + self.shaft_radius) / 2
+            inner_radii = numpy.array([self.inner_radius, self.shaft_radius, rmean, self.r_r, self.stations[1].rhub])
+            widths = numpy.array([self.bore_width, self.Wds, Wmean, self.Wr, self.Wr])
+            rho_ref = Pref / (s_in.R * Tref)
+            mu = 1.458e-6 * Tref**1.5 / (Tref + 110.4)
+            # Conductivity
+            air_k  = -2.5714e-8 * Tref**2 + 9.30e-5 * Tref + 6.686e-4
+            # Prandtl Number
+            Pr = mu * s_in.cp / air_k
+            # Rotational Reynolds number
+            Re_theta = rho_ref * self.omega * inner_radii**2 / mu
+            # Nusselt number
+            Nu = self.get_Nu(Re_theta, Pr)
+            # Convection coefficient
+            h_faces = Nu * air_k / inner_radii
+            h_rim = self.rotor.h
+            # Hollow Cylinder Approximation (LOW FIDELITY ----> REPLACE WITH 2D SOLVER LATER)
+            Ti = Tref - (Tref - s_in.Tt) * numpy.log(inner_radii / inner_radii[0]) / (numpy.log(inner_radii[-1] / inner_radii[0]) + k / (h_rim * inner_radii[0]))
+            Tm = numpy.array([(Ti[idx+1]-Ti[idx])/2 + Ti[idx] for idx in range(len(Ti)-1)] + [Ti[-1]])
+            E = self.E_CMSX4(Tm) * 10**9
+            alpha = self.alpha_CMSX4(Tm)
+            self.sigma_h = numpy.array(list())
+            self.sigma_r = numpy.array(list())
+
+            # Iteration
+            tol, max_iter = 1e-6, 20
+            sigma_bore, sigma_bore_prev, err_prev = 1e8, None, None   # Pa
+            for _ in range(max_iter):
+                sigma_h = [sigma_bore]
+                sigma_r = [0.0]
+                for idx in range(len(inner_radii) - 1):
+                    sigma_hi, sigma_ri = sigma_h[-1], sigma_r[-1]
+                    Si = sigma_hi + sigma_ri
+                    Di = sigma_hi - sigma_ri
+                    So = Si - (1+nu)*(density*self.omega**2)/2 * (inner_radii[idx+1]**2 - inner_radii[idx]**2)
+                    Do = Di*(inner_radii[idx]**2/inner_radii[idx+1]**2) - (1-nu)*(density*self.omega**2)/4 * (inner_radii[idx]**4/inner_radii[idx+1]**2 - inner_radii[idx+1]**2)
+                    sigma_ho = (So + Do) / 2
+                    sigma_ro = (So - Do) / 2
+                    delta_sigma_r = sigma_ro * (widths[idx]/widths[idx+1] - 1)
+                    delta_sigma_h = ((sigma_ho - nu*sigma_ro)*(E[idx+1]/E[idx] - 1) + E[idx+1]*(alpha[idx]*Tm[idx] - alpha[idx+1]*Tm[idx+1]) + nu*delta_sigma_r)
+                    sigma_h.append(sigma_ho + delta_sigma_h)
+                    sigma_r.append(sigma_ro + delta_sigma_r)
+                err = (sigma_r[-1] - self.rim_stress) / abs(self.rim_stress)
+                # Secant Method Update of Bore Stress
+                if abs(err) < tol:
+                    break
+                if err_prev is None:
+                    new_bore = 1.1 * sigma_bore
+                else:
+                    new_bore = sigma_bore - err * (sigma_bore - sigma_bore_prev) / (err - err_prev)
+                sigma_bore_prev, err_prev, sigma_bore = sigma_bore, err, new_bore
+            else:
+                raise RuntimeError(f"Disk solve did not converge (error {err:.2e})")
+            self.sigma_h = numpy.array(sigma_h)
+            self.sigma_r = numpy.array(sigma_r)
+
+
+
+    def E_CMSX4(self, T):
+        # Source: https://doi.org/10.3390/cryst11020152
+        s11 = (7.90e-3 + 2.58e-6 * T + 2.10e-6 * numpy.exp(6.71e-6 * T))
+        return 1 / s11  # GPa
+
+
+    def alpha_CMSX4(self, T):
+        # Source (ResearchGate): https://doi.org/10.3103/S0025654423601301
+        return 1.11e-5 + 3.38e-4 * 2.54e-3 * numpy.exp(2.54e-3 * T)
+
     
     def get_DoR(self, radius_idx, machine):
         ht1 = self.stations[1].ht
@@ -1716,6 +1747,16 @@ class AxialStage:
         return aerodynamics, thermo, geometry, performance
 
 
+    # Nusselt Number for a Free Disk
+    def get_Nu(self, Re_theta, Pr):
+        Nu = numpy.empty_like(Re_theta)
+        # Laminar
+        Nu[Re_theta < 2.5e5] = 0.35 * Re_theta[Re_theta < 2.5e5]**0.5 * Pr**(1.0/3.0)
+        # Turbulent
+        Nu[Re_theta >= 2.5e5] = 0.0197 * Re_theta[Re_theta >= 2.5e5]**0.8 * Pr**0.6
+        return Nu
+
+
 class RadialStation(Station):
     def __init__(self, idx, W, Tt, Pt, triangle:VelocityTriangle=None, FAR=None, M=None):
         super().__init__(W, Tt, Pt, FAR=FAR, M=M, idx=idx)
@@ -1738,9 +1779,11 @@ class BladeGeometry:
                                 case "stator":
                                     # AXIAL TURBINE STATOR 
                                     self.axial_stator(self.stage.stations[1], self.stage.stations[2])
+                                    self.solve_cooling(self.stage.stations[1], self.stage.stations[2], blade="stator")
                                 case "rotor":
                                     # AXIAL TURBINE ROTOR 
                                     self.axial_rotor(self.stage.stations[2], self.stage.stations[3])
+                                    self.solve_cooling(self.stage.stations[1], self.stage.stations[2], blade="rotor")
                         case "radial":
                             pass
                 case "compressor":
@@ -1822,6 +1865,41 @@ class BladeGeometry:
         self.deflections = self.get_deflections(s_in, s_out)
         self.taper_ratio = self.cax[-1] / self.cax[0]
         
+
+    def solve_cooling(self, s1, s2, blade):
+        CDT = self.stage.cooling["CDT"]
+        cp_coolant = self.stage.cooling["cp coolant"]
+        metal_TtMax = self.stage.cooling["metal TtMax"]
+        cooling_efficiency = self.stage.cooling["cooling efficiency"]
+        match blade:
+            case "stator":
+                TDF = self.stage.cooling["OTDF"]
+                # Peak gas temperature 
+                T_peak = TDF * (s1.Tt - CDT) + s1.Tt
+                # Corrected temperature
+                T_peak_corrected = T_peak - 0.15 * (s2.mid.V)**2 / (2 * cp_coolant)
+                mu = 1.458e-6 * T_peak_corrected**(3/2) / (T_peak_corrected + 110.4)
+                Re = (s1.rho * s1.mid.V * self.chord) / mu
+            case "rotor":
+                TDF = self.stage.cooling["RTDF"]
+                # Peak gas temperature
+                T_peak = TDF * (s1.Tt - CDT) + s1.Tt
+                # Corrected temperature 
+                T_peak_corrected = T_peak - 0.15 * (s2.mid.W)**2 / (2 * cp_coolant)
+                mu = 1.458e-6 * T_peak_corrected**(3/2) / (T_peak_corrected + 110.4)
+                Re = (s2.rho * s2.mid.W * self.chord) / mu
+        # Required cooling effectiveness
+        eps_req_S = (T_peak_corrected - metal_TtMax) / (T_peak_corrected - CDT)
+        # Non-dimensional coolant parameter
+        K_cool = eps_req_S / (cooling_efficiency * (1 - eps_req_S))
+        # Convection Coefficient
+        Area = 2 * self.chord * self.h * self.NOB
+        k = 0.000053983 * T_peak_corrected + 0.013568
+        Nu = 0.488 * Re**0.592
+        self.h = Nu * k / self.chord
+        # Required Coolant Flow
+        self.mdot_cool = K_cool * self.h * Area / cp_coolant
+
 
     def get_stagger_angles(self, station_inlet, station_outlet, blade:str):
         s_in = station_inlet
@@ -2130,7 +2208,6 @@ class Afterburner:
                 elif Tt_Ttstar2 <= 1:
                     self.exit.Tt = self.Ttmax
                     self.exit.M = bisection(get_Tt_Ttstar, Tt_Ttstar2, 1, 0, "increasing", self.inlet.gamma)
-
                 self.exit.FAR = Burner.get_FAR(self, self.exit.Tt, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta) 
                 self.exit.Wf = (self.inlet.W - self.inlet.Wf) * self.exit.FAR
                 self.exit.W = self.inlet.W + self.exit.Wf
