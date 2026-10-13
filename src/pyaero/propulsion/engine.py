@@ -626,16 +626,15 @@ class Burner:
     # Cycle method
     @staticmethod
     def get_FAR(T2, T1, FAR1, LHV, eta, burner_object):
-        FARnew = 0.02
-        FAR = -1 
+        FAR = FAR1
         h1 = burner_object.inlet.get_ht(T1, FAR1)
         tolerance = 0.00001
-        error = (abs(FAR - FARnew) / FARnew) 
+        error = tolerance + 0.1
         while error > tolerance:
-            FAR = FARnew
             h2 = burner_object.exit.get_ht(T2, FAR)
-            FARnew = (h2 - h1) / (LHV * eta)
+            FARnew = FAR1 + ((1 + FAR) * h2 - (1 + FAR1) * h1) / (LHV * eta)
             error = (abs(FAR - FARnew) / FARnew) 
+            FAR = FARnew
         return FARnew
     
     # Component Design method
@@ -819,8 +818,6 @@ class Turbine:
         self.exit.M = self.M_exit
         self.exit.W = self.inlet.W + self.mdot_cool
         exit_ht = (self.inlet.ht * self.inlet.W - (self.power/self.eta_m)) / self.exit.W
-        FAR = self.inlet.W * self.inlet.FAR / (self.exit.W - (self.inlet.W * self.inlet.FAR))
-        self.exit.Wf = (self.inlet.W - self.inlet.Wf) * FAR
         self.exit.Tt = self.inlet.T_from_H(exit_ht, self.exit.FAR, self.engine.TET, 100)
         self.ER = (self.exit.Tt  / self.inlet.Tt)**(-self.inlet.gamma / ((self.inlet.gamma - 1)*self.e_t))
         self.exit.Pt = self.inlet.Pt / self.ER
@@ -2226,8 +2223,8 @@ class Afterburner:
                 elif Tt_Ttstar2 <= 1:
                     self.exit.Tt = self.Ttmax
                     self.exit.M = bisection(get_Tt_Ttstar, Tt_Ttstar2, 1, 0, "increasing", self.inlet.gamma)
-                self.exit.FAR = Burner.get_FAR(self.exit.Tt, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta, self) 
-                self.exit.Wf = (self.inlet.W - self.inlet.Wf) * self.exit.FAR
+                FAR = Burner.get_FAR(self.exit.Tt, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta, self) 
+                self.exit.Wf = (self.inlet.W - self.inlet.Wf) * FAR
                 self.exit.W = self.inlet.W + self.exit.Wf
                 self.exit.set_statics(self.exit.M)
 
@@ -2314,24 +2311,19 @@ class Nozzle:
     def solve_converging(self, upstream):
         self.inlet = upstream
         gamma = self.inlet.gamma
-        cp = self.inlet.cp
-        R = self.inlet.R
         critical_NPR = (1 + ((gamma-1) / 2))**(gamma / (gamma-1))
         self.NPR = self.inlet.Pt / self.Pinf
         self.exit = copy.deepcopy(self.inlet)
-        self.exit.idx = 8 # Throat station
+        self.exit.idx = 8 
         if self.NPR >= critical_NPR:
             # Choked
             self.exit.M = 1
-            self.exit.T = (2 / (gamma + 1)) * self.exit.Tt
-            self.exit.V = numpy.sqrt(gamma * R * self.exit.T)
-            self.exit.P = self.exit.Pt * (1 / critical_NPR)
         else:
             # Unchoked
             self.exit.P = self.Pinf
             self.exit.T = self.exit.Tt * (self.exit.P/self.exit.Pt)**((gamma - 1) / gamma)
-            self.exit.V = numpy.sqrt(2 * cp * (self.exit.Tt - self.exit.T))
-            self.exit.M = self.exit.V / numpy.sqrt(gamma * R * self.exit.T)
+            self.exit.V = numpy.sqrt(2 * self.inlet.cp * (self.exit.Tt - self.exit.T))
+            self.exit.M = self.exit.V / numpy.sqrt(gamma * self.inlet.R * self.exit.T)
         self.exit.set_statics(self.exit.M)
 
     # Cycle method
@@ -2339,23 +2331,21 @@ class Nozzle:
         # This function forces the throat to always be choked (CHECK THIS)
         self.inlet = upstream
         gamma = self.inlet.gamma
-        cp = self.inlet.cp
-        R = self.inlet.R
         self.NPR = self.inlet.Pt / self.Pinf
+        self.NPRcrit = ((gamma + 1) / 2)**(gamma / (gamma - 1))
         self.exit = copy.deepcopy(self.inlet)
         self.throat = copy.deepcopy(self.inlet)
         self.throat.idx = 8
         self.exit.idx = 9
-        # Throat Calculations
-        if self.inlet.M < 1:
+        if self.NPR >= self.NPRcrit:
+            # Choked Throat
             self.throat.M = 1
-            self.throat.Tt = self.inlet.Tt
-            self.throat.ht = self.throat.Tt * cp
-            self.throat.Pt = self.inlet.Pt
-            self.throat.W = self.inlet.W
-            self.throat.set_statics(self.throat.M)
-        # Exit Plane Calculations
-        self.exit.P = self.Pinf
+        else:                                        
+            # Unchoked Throat
+            self.throat.M = numpy.sqrt( (2/(gamma-1)) * ((self.inlet.Pt / self.Pinf)**((gamma-1)/gamma) - 1) )
+        self.throat.set_statics(self.throat.M)
+        # Exit 
+        self.exit.P = self.Pinf # (Enforcing Perfectly Expanded Flow for Optimimum Design Point Cycle)
         self.exit.M = numpy.sqrt((2/(gamma - 1)) * ((self.exit.Pt/self.exit.P)**((gamma-1)/gamma) - 1))
         self.exit.set_statics(self.exit.M)
 
@@ -2595,7 +2585,7 @@ class Engine:
                     raw_data.append(component.exit.get_properties())
                 else:
                     raw_data.append(component.exit.get_properties())
-        rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
+        rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 6).tolist()
         station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
         return station_data
 
@@ -2608,7 +2598,10 @@ class Engine:
         V = station_data["V [m/sec]"].values
         P = station_data["Ps [kPa]"].values
         A = station_data["Area [m^2]"].values
-        Wf_in = self.burner.exit.Wf
+        if hasattr(self, "afterburner"):
+            Wf_max = self.afterburner.exit.Wf
+        else:
+            Wf_max = self.burner.exit.Wf
         pressure_thrust = A[-1] * ((P[-1]*1000) - self.ambient.P)
         pressure_power = pressure_thrust * V[-1]
         # Thrust
@@ -2616,11 +2609,11 @@ class Engine:
         # Specific Thrust
         T_ma = thrust / W[0]
         # Thrust Specific Fuel Consumption (TSFC)
-        TSFC = (self.burner.exit.Wf / thrust) * 10**6
+        TSFC = (Wf_max / thrust) * 10**6
         # Propulsive Efficiency
         eta_p = thrust*V[0] / (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) 
         # Thermal Efficiency
-        eta_th = (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) / (Wf_in*self.LHV) 
+        eta_th = (0.5*W[-1]*V[-1]**2 - 0.5*W[0]*V[0]**2 + pressure_power) / (Wf_max*self.LHV) 
         # Overall Efficiency
         eta_o = eta_p * eta_th 
         performance = pandas.DataFrame({
@@ -2795,7 +2788,7 @@ class BypassEngine(Engine):
             else:
                 raw_data.append(component.exit.get_properties())
                     
-        rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
+        rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 6).tolist()
         station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
         return station_data
 
