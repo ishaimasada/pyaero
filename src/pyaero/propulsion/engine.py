@@ -1565,15 +1565,14 @@ class AxialStage:
             alpha = self.alpha_CMSX4(Tm)
             self.sigma_h = numpy.array(list())
             self.sigma_r = numpy.array(list())
-
-            # Iteration
             tol, max_iter = 1e-6, 20
-            sigma_bore, sigma_bore_prev, err_prev = 1e8, None, None   # Pa
+            sigma_bore, sigma_bore_prev, err_prev = 1e8, None, None
             for _ in range(max_iter):
                 sigma_h = [sigma_bore]
                 sigma_r = [0.0]
                 for idx in range(len(inner_radii) - 1):
-                    sigma_hi, sigma_ri = sigma_h[-1], sigma_r[-1]
+                    sigma_hi = sigma_h[-1]
+                    sigma_ri = sigma_r[-1]
                     Si = sigma_hi + sigma_ri
                     Di = sigma_hi - sigma_ri
                     So = Si - (1+nu)*(density*self.omega**2)/2 * (inner_radii[idx+1]**2 - inner_radii[idx]**2)
@@ -1597,7 +1596,24 @@ class AxialStage:
                 raise RuntimeError(f"Disk solve did not converge (error {err:.2e})")
             self.sigma_h = numpy.array(sigma_h)
             self.sigma_r = numpy.array(sigma_r)
-
+            sigma_vm = self.von_Mises(self.sigma_h, self.sigma_r, 0) / 10**6
+            # Time-Til-Fracture from Creep Analysis (LMP found using the same material, but another correlation must be found for each disk material)
+            LMP = get_LMP(sigma_vm)
+            t_rupture = 10**(LMP*(1000/Tm) - 20) #/ 3600     # array, hours
+            self.disk_time_to_fracture = t_rupture.min()      # the disk fails where it is weakest
+            self.critical_radius = inner_radii[t_rupture.argmin()]
+            # Plotting stresses along disk radius
+            r = inner_radii * 1000
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.plot(r, self.sigma_h/1e6, "o-", label=r"$\sigma_h$ (hoop)")
+            ax.plot(r, self.sigma_r/1e6, "s-", label=r"$\sigma_r$ (radial)")
+            ax.axhline(0, color="k", lw=0.5)
+            ax.set_xlabel("Radius (mm)")
+            ax.set_ylabel("Stress (MPa)")
+            ax.set_title("Disk stresses vs radius")
+            ax.legend()
+            ax.grid(alpha=0.3)
+            # plt.show()
 
 
     def E_CMSX4(self, T):
@@ -1609,6 +1625,10 @@ class AxialStage:
     def alpha_CMSX4(self, T):
         # Source (ResearchGate): https://doi.org/10.3103/S0025654423601301
         return 1.11e-5 + 3.38e-4 * 2.54e-3 * numpy.exp(2.54e-3 * T)
+
+
+    def von_Mises(self, sigma1, sigma2, sigma3):
+        return numpy.sqrt((1/2)*((sigma1 - sigma2)**2 + (sigma2 - sigma3)**2 + (sigma3 - sigma1)**2))
 
     
     def get_DoR(self, radius_idx, machine):
@@ -2197,9 +2217,7 @@ class Afterburner:
                 Tt_Ttstar1 = get_Tt_Ttstar(self.inlet.M, self.inlet.gamma)
                 Tt_Ttstar2 = self.Ttmax * (Tt_Ttstar1) / self.inlet.Tt
                 Ttstar = 1 / Tt_Ttstar1 * self.inlet.Tt
-
-                # Check if the afteburner chokes before reaching the given total
-                # temperature (based on Rayleigh flow theory)
+                # Check if the afteburner chokes before reaching the given total temperature (Rayleigh Flow)
                 if Tt_Ttstar2 > 1:
                     print(f"Given Afterburner Exit Temperature exceeds maximum allowed amount {Ttstar}.\n"
                         "This value has been set as the exit total temperatue and a lower value is recommended to be chosen.\n\n")
@@ -2208,7 +2226,7 @@ class Afterburner:
                 elif Tt_Ttstar2 <= 1:
                     self.exit.Tt = self.Ttmax
                     self.exit.M = bisection(get_Tt_Ttstar, Tt_Ttstar2, 1, 0, "increasing", self.inlet.gamma)
-                self.exit.FAR = Burner.get_FAR(self, self.exit.Tt, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta) 
+                self.exit.FAR = Burner.get_FAR(self.exit.Tt, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta, self) 
                 self.exit.Wf = (self.inlet.W - self.inlet.Wf) * self.exit.FAR
                 self.exit.W = self.inlet.W + self.exit.Wf
                 self.exit.set_statics(self.exit.M)
@@ -2334,11 +2352,11 @@ class Nozzle:
             self.throat.Tt = self.inlet.Tt
             self.throat.ht = self.throat.Tt * cp
             self.throat.Pt = self.inlet.Pt
-            self.throat.mdot = self.inlet.mdot
+            self.throat.W = self.inlet.W
             self.throat.set_statics(self.throat.M)
         # Exit Plane Calculations
-        self.exit.P = self.Pinf; # Assuming perfectly expanded flow
-        self.exit.M = numpy.sqrt((2/(gamma - 1)) * ((self.exit.Pt/self.exit.P)^((gamma-1)/gamma) - 1)); # Isentropic Relation
+        self.exit.P = self.Pinf
+        self.exit.M = numpy.sqrt((2/(gamma - 1)) * ((self.exit.Pt/self.exit.P)**((gamma-1)/gamma) - 1))
         self.exit.set_statics(self.exit.M)
 
     # Cycle method for performing preliminary component design ("specification" portion of the component design parameters)
@@ -2561,6 +2579,9 @@ class Engine:
                 elif isinstance(component, Turbine):
                     raw_data.append(component.exit.get_properties())
                     raw_data.append(self.recuperator.pass_hot_stream(component.exit).get_properties())
+                elif isinstance(component, Nozzle) and component.geometry=="CD":
+                    raw_data.append(component.throat.get_properties())
+                    raw_data.append(component.exit.get_properties())
                 else:
                     raw_data.append(component.exit.get_properties())
         else:
@@ -2568,6 +2589,9 @@ class Engine:
                 if isinstance(component, Inlet):
                     raw_data.append(component.freestream.get_properties())
                     raw_data.append(component.inlet.get_properties())
+                    raw_data.append(component.exit.get_properties())
+                elif isinstance(component, Nozzle) and component.geometry=="CD":
+                    raw_data.append(component.throat.get_properties())
                     raw_data.append(component.exit.get_properties())
                 else:
                     raw_data.append(component.exit.get_properties())
@@ -2607,32 +2631,6 @@ class Engine:
                                          "Thermal Efficiency": eta_th,
                                          "Overall Efficiency": eta_o
                                         }, index=[0])
-        # Station Data
-        raw_data = list()
-        if "recuperator" in self.parameters:
-            for component in self.components:
-                if isinstance(component, Inlet):
-                    raw_data.append(component.freestream.get_properties())
-                    raw_data.append(component.inlet.get_properties())
-                    raw_data.append(component.exit.get_properties())
-                elif isinstance(component, Recuperator):
-                    raw_data.append(component.cold_exit.get_properties())
-                elif isinstance(component, Turbine):
-                    raw_data.append(component.exit.get_properties())
-                    raw_data.append(self.recuperator.pass_hot_stream(component.exit).get_properties())
-                else:
-                    raw_data.append(component.exit.get_properties())
-        else:
-            for component in self.components:
-                if isinstance(component, Inlet):
-                    raw_data.append(component.freestream.get_properties())
-                    raw_data.append(component.inlet.get_properties())
-                    raw_data.append(component.exit.get_properties())
-                else:
-                    raw_data.append(component.exit.get_properties())
-                    
-        rounded_data = numpy.round(numpy.array(raw_data, dtype=float), 3).tolist()
-        station_data = pandas.DataFrame(rounded_data, columns=Station.column_names)
         with pandas.ExcelWriter(filename) as writer:
             station_data.to_excel(writer, sheet_name="cycle", index=False)
             performance.to_excel(writer, sheet_name="performance", index=False)

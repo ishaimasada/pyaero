@@ -57,7 +57,7 @@
             "hot exit M": 0.3
         },
         "exhaust": {
-            "C/CD": "C",
+            "C/CD": "CD",
             "discharge coefficient": 0.97,
             "velocity coefficient": 0.98
         }
