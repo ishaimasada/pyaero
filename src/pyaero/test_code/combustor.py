@@ -1,9 +1,7 @@
-'''
-Example usage code for component classes
-'''
+### Example annular combustor ###
+from pyaero.propulsion.engine import Burner
 import json
 import os
-import sys
 
 # Change the current working directory to the file location
 filepath = os.path.abspath(__file__)
@@ -13,11 +11,6 @@ os.chdir(directory)
 # Load parameters from JSON file
 with open("burner_parameters.json", "r") as file:
     parameters = json.load(file)
-
-sys.path.append(r"../propulsion")
-
-# Import all types from engine module
-from engine import Burner
 
 burner = Burner(upstream=None, component_parameters=parameters)
 results = burner.get_results()

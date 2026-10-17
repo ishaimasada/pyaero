@@ -69,6 +69,15 @@ class Station:
         return f"Station {self.idx}\nW = {self.W}\nWc = {self.Wc}\nCorrected W = {self.Wc}\nTt = {self.Tt}\nPt = {self.Pt/1000}\nM = {self.M}"
 
     @property
+    def rhot(self): return self.get_rhot()
+
+    @rhot.setter
+    def rhot(self, value): self._rhot = value
+
+    def get_rhot(self):
+        return self.Pt / (self.R * self.Tt)
+
+    @property
     def Wc(self): return self.get_Wc(self.W, self.Tt, self.Pt)
 
     @Wc.setter
@@ -176,6 +185,10 @@ class Station:
         if self.M != None: station_data = [self.idx, self.W, self.Tt, self.Pt/1000, self.ht/1000, self.Wc, self.Wf, self.FAR, self.M, self.T, self.h/1000, self.P/1000, self.V, self.rho, self.area]
         else: station_data = [self.idx, self.W, self.Tt, self.Pt/1000, self.ht/1000, self.Wc, self.Wf, self.FAR, None, None, None, None, None, None, None]
         return station_data
+
+    @staticmethod
+    def Pr(cp, mu, k):
+        return cp * mu / k
 
 
 class Inlet:
@@ -801,22 +814,14 @@ class Burner:
         r_tip_vec = numpy.linspace(r_min, r_max, num_divisions)
         Lcomb_vec = numpy.linspace(L_min, L_max, num_divisions)
         [r_tip, combustor_length] = numpy.meshgrid(r_tip_vec, Lcomb_vec)
-        OTDF = numpy.full((num_divisions, num_divisions), numpy.nan)
-        theta_i = numpy.full((num_divisions, num_divisions), numpy.nan)
         feasible = numpy.full((num_divisions, num_divisions), False)
-        for i in range(num_divisions):
-            for j in range(num_divisions):
-                # Physical feasibility check
-                r = r_tip[i, j]
-                L = combustor_length[i, j]
-                if numpy.pi * r**2 <= self.Aref:
-                    continue
-                r_hub = numpy.sqrt(r**2 - self.Aref/numpy.pi)
-                OTDF[i, j] = 1 - numpy.exp(1 / (self.K_OTDF * (L / (r - r_hub)) * self.omega_cold))
-                theta_i[i, j] = self.intensity_parameter(self.Aref * L)
-                # Stability Limits
-                if (OTDF[i, j] >= 0.1) and (OTDF[i,j] <= 0.25) and (theta_i[i,j] <= 60):
-                    feasible[i,j] = True
+        r = r_tip.copy()
+        r[numpy.pi * r**2 < self.Aref] = numpy.nan
+        r_hub = numpy.sqrt(r**2 - self.Aref/numpy.pi)
+        OTDF = 1 - numpy.exp(1 / (self.K_OTDF * (combustor_length / (r - r_hub)) * self.omega_cold))
+        theta_i = self.intensity_parameter(self.Aref * combustor_length)
+        # Stability Limits
+        feasible[(OTDF >= 0.1) & (OTDF <= 0.25) & (theta_i <= 60)] = True
         # OTDF
         fig, axes = plt.subplots(1, 3, layout="compressed", figsize=(15, 5))
         otdf_contour = axes[0].contourf(r_tip, combustor_length, OTDF, levels=30)
@@ -2506,7 +2511,14 @@ class Nozzle:
 
 
 class Recuperator:
-    def __init__(self, cold_inlet:Station, cycle_parameters, component_parameters=None):
+    # Source: https://doi.org/10.1063/1.555744
+    POWERS = numpy.array([1.0, 0.5, 0.0, -1.0, -2.0, -3.0, -4.0])
+    A_COEFFS = numpy.array([0.128517, 2.60661, -1.00000, -0.709661, 0.662534, -0.197846, 0.00770147])
+    B_COEFFS = numpy.array([0.465601, 1.26469, -0.511425, 0.274600])
+    C_COEFFS = numpy.array([0.239503, 0.00649768, 1.00000, -1.92615, 2.00383, -1.07553, 0.229414])
+    D_COEFFS = numpy.array([0.402287, 0.356603, -0.163159, 0.138079, -0.0201725])
+
+    def __init__(self, cold_inlet:Station, cycle_parameters=None, component_parameters=None):
         if cycle_parameters != None:
             # CYCLE ANALYSIS
             self.cycle_parameters = cycle_parameters
@@ -2521,26 +2533,192 @@ class Recuperator:
             self.cold_inlet.idx = "3.06"
             self.cold_exit = copy.deepcopy(self.cold_inlet)
             self.cold_exit.idx = "3.07"
-            self.cold_exit.Tt = self.cold_exit.T_from_H(self.cold_inlet.ht+self.delta_ht, self.cold_exit.FAR, 1800, self.cold_inlet.Tt)
+            self.cold_exit.Tt = self.hot_exit.T_from_H(self.cold_inlet.ht+self.delta_ht, self.cold_exit.FAR, 1800, self.cold_inlet.Tt)
             self.cold_exit.Pt *= self.pi_cold
             self.cold_exit.M = self.Mexit_cold
             self.cold_exit.set_statics(self.cold_exit.M)
     
-        if component_parameters != None:
+        if component_parameters is not None:
             # COMPONENT DESIGN
-            threshold_effectiveness = 0.9
-            threshold_loss = 0.03
+            self.design_component(component_parameters)
 
     def pass_hot_stream(self, hot_upstream):
         self.hot_inlet = hot_upstream
         self.hot_inlet.idx = "6.07"
         self.hot_exit = copy.deepcopy(self.hot_inlet)
         self.hot_exit.idx = "6.08"
-        self.hot_exit.Tt = self.cold_exit.T_from_H(self.hot_inlet.ht-self.delta_ht, self.hot_exit.FAR, self.hot_inlet.Tt, 0)
+        hot_enthalpy_drop = (self.cold_exit.W/self.hot_exit.W)*self.delta_ht
+        self.hot_exit.Tt = self.cold_exit.T_from_H(self.hot_inlet.ht-hot_enthalpy_drop, self.hot_exit.FAR, self.hot_inlet.Tt, 0)
         self.hot_exit.Pt *= self.pi_hot
         self.hot_exit.M = self.Mexit_hot
         self.hot_exit.set_statics(self.hot_exit.M)
         return self.hot_exit
+
+    def design_component(self, component_parameters):
+        self.component_parameters = component_parameters
+        match self.component_parameters["geometry"].lower():
+            case "shell and tube":
+                self.solve_shell_tube()
+            case "concentric tube":
+                self.solve_concentric()
+            case "plate fin":
+                self.solve_plate_fin()
+            case "primary surface":
+                self.solve_primary_surface()
+            case _:
+                raise ValueError("No Valid Geometry Chosen. Choose from available geometries.")
+
+    def solve_concentric(self):
+        # Design Parameters
+        self.L = self.component_parameters["length"]
+        self.Ds = self.component_parameters["outer tube inner diameter"]
+        self.Do = 2 * self.component_parameters["inner tube outer radius"] 
+        self.Di = self.Do - 2 * self.component_parameters["inner tube thickness"]
+        self.kw = self.component_parameters["material"]["thermal conductivity"]
+        self.num_tubes = self.component_parameters["number of tubes"]
+        cold_flow = self.component_parameters["cold"]
+        hot_flow = self.component_parameters["hot"]
+        self.cold_inlet = Station(cold_flow["W"] / self.num_tubes, cold_flow["Tt"], cold_flow["Pt"])
+        self.hot_inlet = Station(hot_flow["W"] / self.num_tubes, hot_flow["Tt"], hot_flow["Pt"])
+        self.cold_exit = copy.deepcopy(self.cold_inlet)
+        self.hot_exit = copy.deepcopy(self.hot_inlet)
+        tolerance = 1e-3
+        iterations = 100
+        # Geometry Checks
+        if self.Di <= 0: raise ValueError(f"Inner tube thickness leaves Di = {self.Di:.4f} m.")
+        if self.Ds <= self.Do: raise ValueError(f"Shell inner diameter {self.Ds} m must exceed inner tube outer diameter {self.Do} m.")
+        # Flow Areas
+        self.A_c = numpy.pi * self.Di**2 / 4 
+        self.A_h = numpy.pi * (self.Ds**2 - self.Do**2) / 4
+        # Hydraulic Diameter
+        self.Dh_c = self.Di
+        self.Dh_h = self.Ds - self.Do
+        # Iterate to solve for cold and hot exit Tt
+        for _ in range(iterations):
+            Tc_mean = (self.cold_inlet.Tt + self.cold_exit.Tt) / 2
+            Th_mean = (self.hot_inlet.Tt + self.hot_exit.Tt) / 2
+            cp_mean_c = (self.cold_inlet.cp + self.cold_exit.cp) / 2
+            cp_mean_h = (self.hot_inlet.cp + self.hot_exit.cp) / 2
+            h_c, Re_c, rho_c = self.get_h(Tc_mean, self.cold_inlet, cp_mean_c, self.Dh_c, self.A_c)
+            h_h, Re_h, rho_h = self.get_h(Th_mean, self.hot_inlet, cp_mean_h, self.Dh_h, self.A_h)
+            UA = 1.0 / (1 / (h_c*numpy.pi*self.Di* self.L) + numpy.log(self.Do/self.Di) / (2*numpy.pi*self.kw*self.L) + 1 / (h_h*numpy.pi*self.Do*self.L))
+            Cc = self.cold_inlet.W*cp_mean_c
+            Ch = self.hot_inlet.W*cp_mean_h
+            Cmin = min(Cc, Ch) 
+            Cmax = max(Cc, Ch) 
+            NTU = UA / Cmin
+            Cr = Cmin / Cmax
+            effectiveness = self.eps_counterflow(NTU, Cr)
+            Q = effectiveness * Cmin * (self.hot_inlet.Tt - self.cold_inlet.Tt)
+            Tc_new = self.cold_inlet.Tt + Q/Cc
+            Th_new = self.hot_inlet.Tt - Q/Ch
+            done = abs(Tc_new - self.cold_exit.Tt) < tolerance and abs(Th_new - self.hot_exit.Tt) < tolerance
+            self.cold_exit.Tt = Tc_new
+            self.hot_exit.Tt = Th_new
+            if done:
+                break
+        else:
+            raise RuntimeError(f"Concentric tube solution did not converge in {iterations} iterations.")
+        # Results
+        self.NTU = NTU
+        self.UA = UA
+        self.Re_c = Re_c
+        self.Re_h = Re_h
+        self.effectiveness = effectiveness
+        self.Q = Q * self.num_tubes
+        self.delta_ht = Q / self.cold_inlet.W
+        V_c = self.cold_inlet.W / (rho_c * self.A_c)
+        V_h = self.hot_inlet.W / (rho_h * self.A_h)
+        self.dP_c = self.friction_factor(Re_c) * self.L / self.Dh_c * rho_c * V_c**2 / 2
+        self.dP_h = self.friction_factor(Re_h) * self.L / self.Dh_h * rho_h * V_h**2 / 2
+        self.cold_exit.Pt -= self.dP_c
+        self.hot_exit.Pt -= self.dP_h
+        self.pi_cold = self.cold_exit.Pt / self.cold_inlet.Pt
+        self.pi_hot = self.hot_exit.Pt / self.hot_inlet.Pt
+
+
+    def solve_shell_tube(self):
+        pass
+    def solve_plate_fin(self):
+        pass
+    def solve_primary_surface(self):
+        pass
+
+    def _temperature_term(self, T, coeffs):
+        Tr = numpy.asarray(T) / 132.5
+        return numpy.sum(coeffs * Tr[..., None] ** self.POWERS, axis=-1)
+
+    def _density_term(self, rho, coeffs):
+        rho_r = numpy.asarray(rho) / 314.3
+        n = numpy.arange(1, len(coeffs) + 1)
+        return numpy.sum(coeffs * rho_r[..., None] ** n, axis=-1)
+
+    def get_mu(self, T, rho):
+        return 6.16090e-6 * (self._temperature_term(T, self.A_COEFFS) + self._density_term(rho, self.B_COEFFS))
+
+    def get_k(self, T, rho):
+        return 25.9778e-3 * (self._temperature_term(T, self.C_COEFFS) + self._density_term(rho, self.D_COEFFS))
+
+    def friction_factor(self, Re):
+        return 64.0 / Re if Re < 2300 else (0.790 * numpy.log(Re) - 1.64) ** -2
+ 
+    def get_Nu(self, Re, Pr):
+        if Re < 2300:
+            return 3.66
+        f = self.friction_factor(Re)
+        return (f / 8) * (Re - 1000) * Pr / (1 + 12.7 * numpy.sqrt(f / 8) * (Pr**(2 / 3) - 1))
+
+    def get_h(self, Tt, station:Station, cp, Dh, area):
+        rho = station.Pt/(station.R*Tt)
+        mu = self.get_mu(Tt, rho)
+        Re = self.hot_inlet.W * Dh / (area * mu)
+        k = self.get_k(Tt, rho)
+        Pr = Station.Pr(cp,mu,k)
+        Nu = self.get_Nu(Re, Pr)
+        h = Nu * k / Dh
+        return h, Re, rho
+
+    def eps_counterflow(self, NTU, Cr):
+        if abs(1 - Cr) < 1e-9:
+            return NTU / (1 + NTU)
+        e = numpy.exp(-NTU * (1 - Cr))
+        return (1 - e) / (1 - Cr * e)
+
+    def get_results(self):
+        results = {
+            "cold pressure ratio": self.pi_cold,
+            "hot pressure ratio": self.pi_hot,
+            "effectiveness": self.effectiveness,
+            "delta ht": self.delta_ht,
+            "number of tubes": self.num_tubes,
+            "cold": {
+                "thermo": {
+                    "mass flow": self.cold_inlet.W,
+                    "inlet Tt": self.cold_inlet.Tt, 
+                    "exit Tt": self.cold_exit.Tt,
+                    "inlet Pt": self.cold_inlet.Pt,
+                    "exit Pt": self.cold_exit.Pt
+                },
+                "geometry": {
+                    "hydraulic diameter": self.Dh_c,
+                    "flow area": self.A_c
+                }
+            },
+            "hot": {
+                "thermo": {
+                    "mass flow": self.hot_inlet.W,
+                    "inlet Tt": self.hot_inlet.Tt, 
+                    "exit Tt": self.hot_exit.Tt,
+                    "inlet Pt": self.hot_inlet.Pt,
+                    "exit Pt": self.hot_exit.Pt
+                },
+                "geometry": {
+                    "hydraulic diameter": self.Dh_h,
+                    "flow area": self.A_h
+                }
+            }
+        }
+        return results
 
 
 def format_axes(ax, title, ylabel):

@@ -1,0 +1,23 @@
+{
+  "cold": {
+    "W": 0.1,
+    "Tt": 300,
+    "Pt": 200000
+  },
+  "hot": {
+    "W": 0.2,
+    "Tt": 1000,
+    "Pt": 300000
+  },
+  "geometry": "concentric tube",
+  "length": 2,
+  "number of tubes": 60,
+  "inner tube outer radius": 0.005,
+  "inner tube thickness": 0.001,
+  "outer tube inner diameter": 0.016,
+  "material": {
+    "name": "Inconel 625",
+    "density": 8440,
+    "thermal conductivity": 16
+  }
+}
