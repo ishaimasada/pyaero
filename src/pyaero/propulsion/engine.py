@@ -644,10 +644,13 @@ class Burner:
         self.FAR_stoichiometric = 1 / 15
         match self.machine.lower():
             case "annular":
+                self.K_OTDF = -0.05
                 self.solve_annular()
             case "canannular":
+                self.K_OTDF = -0.07
                 self.solve_canannular()
             case "can":
+                self.K_OTDF = -0.07
                 self.solve_can()
     
 
@@ -655,9 +658,9 @@ class Burner:
     def solve_annular(self):
         # Design Parameters
         Tt_in = self.component_parameters["inlet Tt"]
-        Pt_in = self.component_parameters["inlet Pt"] * 10**3 # convert to Pa for calculations
+        Pt_in = self.component_parameters["inlet Pt"]
         Tt_exit = self.component_parameters["exit Tt"]
-        Pt_exit = self.component_parameters["exit Pt"] * 10**3 # convert to Pa for calculations
+        Pt_exit = self.component_parameters["exit Pt"]
         W = self.component_parameters["W"]
         Wf = self.component_parameters["Wf"]
         self.inlet = Station(W, Tt_in, Pt_in)
@@ -667,7 +670,6 @@ class Burner:
         self.exit.Tt = Tt_exit
         self.exit.Pt = Pt_exit
         self.omega_cold = self.component_parameters["omega cold"]
-        self.K_OTDF = self.component_parameters["K OTDF"]
         self.K_hot = self.component_parameters["K hot"]
         self.Kh = self.component_parameters["dynamic pressure ratio"]
         self.liner_area_frac = self.component_parameters["liner area fraction"]
@@ -682,13 +684,14 @@ class Burner:
         # Thermo
         self.zones = self.calculate_distribution(phi_PRZ, num_holes_PRZ, num_holes_DIL, phi_SEC, num_holes_SEC)
         self.TR = self.exit.Tt / self.inlet.Tt
-        self.Pt_loss = (self.inlet.Pt - self.exit.Pt) / self.inlet.Pt
+        # self.Pt_loss = (self.inlet.Pt - self.exit.Pt) / self.inlet.Pt
+        self.Pt_loss = self.component_parameters["Pt loss"]
         self.omega_hot = self.K_hot * (self.TR - 1)
         self.omega_ref = self.omega_cold + self.omega_hot
         self.calculate_ref_quantities(self.omega_ref, self.Pt_loss)
         self.Pt_loss_check = self.omega_ref * (self.inlet.R/2) * (self.inlet.W * numpy.sqrt(self.inlet.Tt) / (self.Aref * self.inlet.Pt))**2
         # Geometry
-        self.size_holes(self.Kh)
+        self.size_holes()
         self.Aliner = self.liner_area_frac * self.Aref
         self.casing_r_inner = numpy.sqrt(self.casing_r_outer**2 - self.Aref / numpy.pi)
         self.dl = self.casing_r_outer - self.casing_r_inner
@@ -696,10 +699,10 @@ class Burner:
         self.liner_r_inner = self.liner_r_outer - numpy.sqrt(self.Aliner / (2 * numpy.pi))
         self.volume = self.Aref * self.length
         # Performance
-        self.OTDF = 1 - numpy.exp(1 / (-self.K_OTDF * (self.length / self.dl) * self.omega_cold))
+        self.OTDF = self.get_OTDF(self.length, self.dl)
         self.tau_res = self.length / self.Vref
         self.tau_res_ms = self.tau_res * 1000
-        self.theta_i = self.intensity_parameter() 
+        self.theta_i = self.intensity_parameter(self.volume) 
         self.theta_L = self.stability_parameter()
         self.eta_comb = self.combustion_efficiency(self.theta_L)
         # Check Results 
@@ -772,18 +775,21 @@ class Burner:
         zones["dilution"] = dilution
         return zones
 
-    def size_holes(self, Kh):
-        self.Vjet = numpy.sqrt(2 * Kh * self.inlet.R * self.inlet.Tt)
+    def size_holes(self):
+        self.Vjet = numpy.sqrt(2 * self.Kh * self.inlet.R * self.inlet.Tt)
         self.Aheff = self.Aref / numpy.sqrt(self.omega_cold)
         self.alphas = numpy.array([self.zones[zone_key]["Wa"]/self.inlet.W/self.zones[zone_key]["num holes"] for zone_key in self.zones])
-        self.CD = 1.65 * (Kh - 1) / numpy.sqrt(4*Kh**2 - Kh*(2 - self.alphas)**2)
+        self.CD = 1.65 * (self.Kh - 1) / numpy.sqrt(4*self.Kh**2 - self.Kh*(2 - self.alphas)**2)
         self.Ah = self.Aheff / self.CD
         self.Dh = numpy.sqrt(self.Ah * 4 / numpy.pi)
         for idx, zone_key in enumerate(self.zones):
             self.zones[zone_key]["Dh"] = self.Dh[idx]
 
-    def intensity_parameter(self):
-        return (self.exit.Wf * self.LHV * 1e-6) / (self.volume * (self.inlet.Pt/101325))
+    def get_OTDF(self, length, dl):
+        return 1 - numpy.exp(1 / (self.K_OTDF * (length / dl) * self.omega_cold))
+
+    def intensity_parameter(self, volume):
+        return (self.exit.Wf * self.LHV * 1e-6) / (volume * (self.inlet.Pt/101325))
 
     def stability_parameter(self):
         return self.inlet.W / (self.volume * ((self.inlet.Pt/101325)**1.8) * 10**(0.00145 * (self.inlet.Tt - 400)))
@@ -791,10 +797,44 @@ class Burner:
     def combustion_efficiency(self, stability):
         return (-5.46974e-10 * stability**5) + (3.97923e-8 * stability**4) - (8.73718e-6 * stability**3) + (3.00007e-4 * stability**2) - (4.568246e-3 * stability) + 99.7
 
-    def sensitivity(self):
-        match self.machine.lower():
-            case "annuluar":
-                pass
+    def sensitivity(self, r_min, r_max, L_min, L_max, num_divisions):
+        r_tip_vec = numpy.linspace(r_min, r_max, num_divisions)
+        Lcomb_vec = numpy.linspace(L_min, L_max, num_divisions)
+        [r_tip, combustor_length] = numpy.meshgrid(r_tip_vec, Lcomb_vec)
+        OTDF = numpy.full((num_divisions, num_divisions), numpy.nan)
+        theta_i = numpy.full((num_divisions, num_divisions), numpy.nan)
+        feasible = numpy.full((num_divisions, num_divisions), False)
+        for i in range(num_divisions):
+            for j in range(num_divisions):
+                # Physical feasibility check
+                r = r_tip[i, j]
+                L = combustor_length[i, j]
+                if numpy.pi * r**2 <= self.Aref:
+                    continue
+                r_hub = numpy.sqrt(r**2 - self.Aref/numpy.pi)
+                OTDF[i, j] = 1 - numpy.exp(1 / (self.K_OTDF * (L / (r - r_hub)) * self.omega_cold))
+                theta_i[i, j] = self.intensity_parameter(self.Aref * L)
+                # Stability Limits
+                if (OTDF[i, j] >= 0.1) and (OTDF[i,j] <= 0.25) and (theta_i[i,j] <= 60):
+                    feasible[i,j] = True
+        # OTDF
+        fig, axes = plt.subplots(1, 3, layout="compressed", figsize=(15, 5))
+        otdf_contour = axes[0].contourf(r_tip, combustor_length, OTDF, levels=30)
+        axes[0].set_title("OTDF") 
+        axes[0].set_box_aspect(1)
+        fig.colorbar(otdf_contour)
+        # Intensity Parameter
+        theta_i_contour = axes[1].contourf(r_tip, combustor_length, theta_i, levels=30)
+        axes[1].set_title("Loading Parameter") 
+        axes[1].set_box_aspect(1)
+        fig.colorbar(theta_i_contour)
+        # Feasibility
+        feasibility_contour = axes[2].contourf(r_tip, combustor_length, feasible, levels=30)
+        axes[2].set_title("Feasibility") 
+        axes[2].set_box_aspect(1)
+        fig.colorbar(feasibility_contour)
+        plt.show()
+
     
     def get_results(self):
         results = {
@@ -813,7 +853,7 @@ class Burner:
                 "omega ref": self.omega_ref,
                 "dPt/Pt (target)": self.Pt_loss,
                 "dPt/Pt (check from Aref)": self.Pt_loss_check,
-                "Zones": self.zones,
+                "zones": self.zones,
                 "OTDF": self.OTDF,
                 "Residence time": self.tau_res_ms,
                 "intensity": self.theta_i,

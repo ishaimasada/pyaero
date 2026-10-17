@@ -21,4 +21,4 @@ from engine import Burner
 
 burner = Burner(upstream=None, component_parameters=parameters)
 results = burner.get_results()
-print(results["geometry"])
+burner.sensitivity(0.22, 0.28, 0.35, 0.55, 140)
