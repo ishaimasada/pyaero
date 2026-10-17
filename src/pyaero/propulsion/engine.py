@@ -641,6 +641,7 @@ class Burner:
     def design_component(self, component_parameters):
         self.component_parameters = component_parameters
         self.machine = component_parameters["machine"]
+        self.FAR_stoichiometric = 1 / 15
         match self.machine.lower():
             case "annular":
                 self.solve_annular()
@@ -653,68 +654,54 @@ class Burner:
     # Component Design method
     def solve_annular(self):
         # Design Parameters
+        Tt_in = self.component_parameters["inlet Tt"]
+        Pt_in = self.component_parameters["inlet Pt"] * 10**3 # convert to Pa for calculations
+        Tt_exit = self.component_parameters["exit Tt"]
+        Pt_exit = self.component_parameters["exit Pt"] * 10**3 # convert to Pa for calculations
+        W = self.component_parameters["W"]
+        Wf = self.component_parameters["Wf"]
+        self.inlet = Station(W, Tt_in, Pt_in)
+        self.exit = copy.deepcopy(self.inlet)
+        self.exit.W += Wf
+        self.exit.Wf = Wf
+        self.exit.Tt = Tt_exit
+        self.exit.Pt = Pt_exit
         self.omega_cold = self.component_parameters["omega cold"]
         self.K_OTDF = self.component_parameters["K OTDF"]
         self.K_hot = self.component_parameters["K hot"]
+        self.Kh = self.component_parameters["dynamic pressure ratio"]
         self.liner_area_frac = self.component_parameters["liner area fraction"]
         self.casing_r_outer = self.component_parameters["r tip"]
         self.length = self.component_parameters["combustor length"]
-        self.phi_PRZ = self.component_parameters["phi PRZ"]
-        self.phi_SEC = self.component_parameters["phi SEC"]
-        self.Tt_in = self.component_parameters["inlet Tt"]
-        self.Pt_in = self.component_parameters["inlet Pt"] * 10**3 # convert to Pa for calculations
-        self.Tt_exit = self.component_parameters["exit Tt"]
-        self.Pt_exit = self.component_parameters["exit Pt"] * 10**3 # convert to Pa for calculations
-        W = self.component_parameters["W"]
-        Wf = self.component_parameters["Wf"]
-        LHV = self.component_parameters["LHV"]
-        R = self.component_parameters["R"]
-        gamma = self.component_parameters["gamma"]
-        FAR = Wf / (W - Wf)
-        self.inlet = Station(W, self.Tt_in, self.Pt_in/10**3, FAR=FAR)
-        self.exit = copy.deepcopy(self.inlet)
-        self.exit.W += Wf
-        self.exit.Tt = self.Tt_exit
-        self.exit.Pt = self.Pt_exit/10**3
-
-        # Calculations
-        self.TR = self.Tt_exit / self.Tt_in
+        self.LHV = self.component_parameters["LHV"]
+        phi_PRZ = self.component_parameters["phi PRZ"]
+        num_holes_PRZ = self.component_parameters["PRZ number of holes"]
+        phi_SEC = self.component_parameters["phi SEC"]
+        num_holes_SEC = self.component_parameters["SEC number of holes"]
+        num_holes_DIL = self.component_parameters["DIL number of holes"]
+        # Thermo
+        self.zones = self.calculate_distribution(phi_PRZ, num_holes_PRZ, num_holes_DIL, phi_SEC, num_holes_SEC)
+        self.TR = self.exit.Tt / self.inlet.Tt
         self.Pt_loss = (self.inlet.Pt - self.exit.Pt) / self.inlet.Pt
         self.omega_hot = self.K_hot * (self.TR - 1)
         self.omega_ref = self.omega_cold + self.omega_hot
-        self.Aref = (W/self.Pt_in) * numpy.sqrt((self.omega_ref * R * self.Tt_in) / (2 * self.Pt_loss)) 
-        if numpy.pi * self.casing_r_outer**2 <= self.Aref:
-            # Check if tip radius leads causes area to be smaller than reference area
-            raise ValueError(f"Tip radius is too small. Increase tip radius so that area is less than reference area ({self.Aref}m^2)")
-        FAR_stoichiometric = 1 / 15
-        self.FAR_overall = Wf / W
-        self.phi_overall = self.FAR_overall / FAR_stoichiometric
-        self.Pt_loss_check = self.omega_ref * (R/2) * (W * numpy.sqrt(self.Tt_in) / (self.Aref * self.Pt_in))**2
-        self.rho_t3 = self.Pt_in / (R * self.Tt_in)
-        self.Vref = W / (self.rho_t3 * self.Aref)
-        self.q_ref = 0.5 * self.rho_t3 * self.Vref**2
-        self.Mref = self.Vref / numpy.sqrt(gamma * R * self.Tt_in)
+        self.calculate_ref_quantities(self.omega_ref, self.Pt_loss)
+        self.Pt_loss_check = self.omega_ref * (self.inlet.R/2) * (self.inlet.W * numpy.sqrt(self.inlet.Tt) / (self.Aref * self.inlet.Pt))**2
+        # Geometry
+        self.size_holes(self.Kh)
         self.Aliner = self.liner_area_frac * self.Aref
         self.casing_r_inner = numpy.sqrt(self.casing_r_outer**2 - self.Aref / numpy.pi)
         self.dl = self.casing_r_outer - self.casing_r_inner
         self.liner_r_outer = numpy.sqrt(self.Aliner / (2 * numpy.pi)) + (self.casing_r_inner + self.dl/2)
         self.liner_r_inner = self.liner_r_outer - numpy.sqrt(self.Aliner / (2 * numpy.pi))
-        self.Wa_PRZ = Wf / (self.phi_PRZ * FAR_stoichiometric)
-        self.Wa_to_SEC = Wf / (self.phi_SEC * FAR_stoichiometric)
-        self.Wa_SEC = self.Wa_to_SEC - self.Wa_PRZ
-        self.Wa_DIL = W - self.Wa_to_SEC
-        self.PRZ_Wa_W = (self.Wa_PRZ / W) * 100
-        self.SEC_Wa_W = (self.Wa_SEC / W) * 100
-        self.DIL_Wa_W = (self.Wa_DIL / W) * 100
-        self.OTDF = 1 - numpy.exp(1 / (-self.K_OTDF * (self.length / self.dl) * self.omega_cold))
         self.volume = self.Aref * self.length
+        # Performance
+        self.OTDF = 1 - numpy.exp(1 / (-self.K_OTDF * (self.length / self.dl) * self.omega_cold))
         self.tau_res = self.length / self.Vref
         self.tau_res_ms = self.tau_res * 1000
-        Pt3_atm = self.Pt_in / 101325
-        self.theta_i = (Wf * LHV * 1e-6) / (self.volume * Pt3_atm)
-        self.theta_L = W / (self.volume * (Pt3_atm**1.8) * 10**(0.00145 * (self.Tt_in - 400)))
-        self.eta_comb = (-5.46974e-10*self.theta_L**5) + (3.97923e-8*self.theta_L**4) - (8.73718e-6*self.theta_L**3) + (3.00007e-4*self.theta_L**2) - (4.568246e-3*self.theta_L) + 99.7
-        self.Aheff = self.Aref / numpy.sqrt(self.omega_cold)
+        self.theta_i = self.intensity_parameter() 
+        self.theta_L = self.stability_parameter()
+        self.eta_comb = self.combustion_efficiency(self.theta_L)
         # Check Results 
         all_pass = True
         if self.OTDF > 0.25:
@@ -732,59 +719,123 @@ class Burner:
         if self.eta_comb < 95:
             print(f'FLAG: Combustion efficiency = {self.eta_comb:.2f} %% below 95%%. Reduce loading or increase volume.\n')
             all_pass = False
-        if self.phi_PRZ < 0.8 or self.phi_PRZ > 1.3:
-            print(f'FLAG: phi_PRZ = {self.phi_PRZ:.4f} outside stable ignition range 0.8-1.3.\n')
+        if self.zones["primary"]["phi"] < 0.8 or self.zones["primary"]["phi"] > 1.3:
+            print(f'FLAG: phi_PRZ = {self.zones["primary"]["phi"]:.4f} outside stable ignition range 0.8-1.3.\n')
             all_pass = False
         if all_pass == False:
             print("One or more checks failed. Check log.")
-    
+
     def solve_canannular(self):
         pass
 
     def solve_can(self):
         pass
+
+    def calculate_ref_quantities(self, omega_ref, Pt_loss):
+        self.Aref = (self.inlet.W/self.inlet.Pt) * numpy.sqrt((omega_ref * self.inlet.R * self.inlet.Tt) / (2 * Pt_loss)) 
+        if numpy.pi * self.casing_r_outer**2 <= self.Aref:
+            # Check if tip radius causes area to be smaller than reference area
+            raise ValueError(f"Tip radius is too small. Increase tip radius so that area is less than reference area ({self.Aref}m^2)")
+        rhot3 = self.inlet.Pt/(self.inlet.R*self.inlet.Tt)
+        self.Vref = self.inlet.W / (rhot3 * self.Aref)
+        self.q_ref = 0.5 * rhot3 * self.Vref**2
+        self.Mref = self.Vref / numpy.sqrt(self.inlet.gamma * self.inlet.R * self.inlet.Tt)
+
+    def calculate_distribution(self, phi_PRZ, num_holes_PRZ, num_holes_DIL, phi_SEC=None, num_holes_SEC=None):
+        self.FAR_overall = self.exit.Wf / self.inlet.W
+        self.phi_overall = self.FAR_overall / self.FAR_stoichiometric
+        primary = dict()
+        dilution = dict()
+        zones = dict()
+        primary["phi"] = phi_PRZ
+        primary["Wa"] = self.exit.Wf / (primary["phi"] * self.FAR_stoichiometric)
+        primary["added air"] = primary["Wa"]
+        primary["Wa/W"] = (primary["Wa"] / self.inlet.W) * 100
+        primary["num holes"] = num_holes_PRZ
+        zones["primary"] = primary
+        if phi_SEC is not None:
+            secondary = dict()
+            secondary["num holes"] = num_holes_SEC
+            secondary["phi"] = phi_SEC
+            secondary["Wa"] = self.exit.Wf / (secondary["phi"] * self.FAR_stoichiometric)
+            secondary["added air"] = secondary["Wa"] - primary["Wa"]
+            secondary["relative addition"] = (secondary["added air"] / self.inlet.W) * 100
+            dilution["added air"] = self.inlet.W - secondary["Wa"]
+            dilution["Wa"] = dilution["added air"] + secondary["Wa"]
+            zones["secondary"] = secondary
+        else:
+            dilution["added air"] = self.inlet.W - primary["Wa"]
+            dilution["Wa"] = dilution["added air"] + primary["Wa"]
+        dilution["num holes"] = num_holes_DIL
+        dilution["phi"] = self.exit.Wf / dilution["Wa"] / self.FAR_stoichiometric
+        dilution["relative addition"] = (dilution["added air"] / self.inlet.W) * 100
+        zones["dilution"] = dilution
+        return zones
+
+    def size_holes(self, Kh):
+        self.Vjet = numpy.sqrt(2 * Kh * self.inlet.R * self.inlet.Tt)
+        self.Aheff = self.Aref / numpy.sqrt(self.omega_cold)
+        self.alphas = numpy.array([self.zones[zone_key]["Wa"]/self.inlet.W/self.zones[zone_key]["num holes"] for zone_key in self.zones])
+        self.CD = 1.65 * (Kh - 1) / numpy.sqrt(4*Kh**2 - Kh*(2 - self.alphas)**2)
+        self.Ah = self.Aheff / self.CD
+        self.Dh = numpy.sqrt(self.Ah * 4 / numpy.pi)
+        for idx, zone_key in enumerate(self.zones):
+            self.zones[zone_key]["Dh"] = self.Dh[idx]
+
+    def intensity_parameter(self):
+        return (self.exit.Wf * self.LHV * 1e-6) / (self.volume * (self.inlet.Pt/101325))
+
+    def stability_parameter(self):
+        return self.inlet.W / (self.volume * ((self.inlet.Pt/101325)**1.8) * 10**(0.00145 * (self.inlet.Tt - 400)))
+
+    def combustion_efficiency(self, stability):
+        return (-5.46974e-10 * stability**5) + (3.97923e-8 * stability**4) - (8.73718e-6 * stability**3) + (3.00007e-4 * stability**2) - (4.568246e-3 * stability) + 99.7
+
+    def sensitivity(self):
+        match self.machine.lower():
+            case "annuluar":
+                pass
     
     def get_results(self):
-        thermo = {
-            "Inlet Tt": self.Tt_in,
-            "Exit Tt": self.Tt_exit,
-            "Inlet Pt": self.Pt_in,
-            "Exit Pt": self.Pt_exit,
-            "Inlet Mass Flow": self.inlet.W,
-            "Fuel Mass Flow": self.exit.Wf,
-            "overall FAR": self.FAR_overall,
-            "overall phi": self.phi_overall,
-            "TR": self.TR,
-            "omega cold": self.omega_cold,
-            "omega hot": self.omega_hot,
-            "omega ref": self.omega_ref,
-            "dPt/Pt (target)": self.Pt_loss,
-            "dPt/Pt (check from Aref)": self.Pt_loss_check,
-            "PRZ": [self.phi_PRZ, self.PRZ_Wa_W],
-            "SEC": [self.phi_SEC, self.SEC_Wa_W],
-            "DIL":  self.DIL_Wa_W,
-            "OTDF": self.OTDF,
-            "Residence time": self.tau_res_ms,
-            "intensity": self.theta_i / 1e6,
-            "loading": self.theta_L,
-            "Combustion efficiency": self.eta_comb
+        results = {
+            "thermo": {
+                "Inlet Tt": self.inlet.Tt,
+                "Exit Tt": self.exit.Tt,
+                "Inlet Pt": self.inlet.Pt,
+                "Exit Pt": self.exit.Pt,
+                "Inlet Mass Flow": self.inlet.W,
+                "Fuel Mass Flow": self.exit.Wf,
+                "overall FAR": self.FAR_overall,
+                "overall phi": self.phi_overall,
+                "TR": self.TR,
+                "omega cold": self.omega_cold,
+                "omega hot": self.omega_hot,
+                "omega ref": self.omega_ref,
+                "dPt/Pt (target)": self.Pt_loss,
+                "dPt/Pt (check from Aref)": self.Pt_loss_check,
+                "Zones": self.zones,
+                "OTDF": self.OTDF,
+                "Residence time": self.tau_res_ms,
+                "intensity": self.theta_i,
+                "loading": self.theta_L,
+                "Combustion efficiency": self.eta_comb
+            },
+            "geometry": {
+                "Aref": self.Aref,
+                "Vref":  self.Vref,
+                "qref":  self.q_ref,
+                "Mref": self.Mref,
+                "Aliner": self.Aliner,
+                "casing outer radius": self.casing_r_outer,
+                "casing inner radius": self.casing_r_inner,
+                "liner outer radius": self.liner_r_outer,
+                "liner inner radius": self.liner_r_inner,
+                "combustor length": self.length,
+                "dl": self.dl,
+                "Volume": self.volume
+            }
         }
-        geometry = {
-            "Aref": self.Aref,
-            "Vref":  self.Vref,
-            "qref":  self.q_ref,
-            "Mref": self.Mref,
-            "Aliner": self.Aliner,
-            "casing outer radius": self.casing_r_outer,
-            "casing inner radius": self.casing_r_inner,
-            "liner outer radius": self.liner_r_outer,
-            "liner inner radius": self.liner_r_inner,
-            "combustor length": self.length,
-            "dl": self.dl,
-            "Volume": self.volume,
-            "Aheff": self.Aheff
-        }
-        return thermo, geometry
+        return results
 
 
 class Turbine:
@@ -2233,6 +2284,8 @@ class Afterburner:
         match self.component_parameters["flameholder geometry"].lower():
             case "vee gutter":
                 self.solve_vee_gutter()
+            case "can":
+                self.solve_can()
             case "assymetric":
                 self.solve_assymetric()
 
@@ -2281,6 +2334,8 @@ class Afterburner:
         return (1 + gamma_i*Mi**2*(1 - self.CD/2)*((1 + (gamma_e - 1)/2*Me**2)**(gamma_e/(gamma_e-1)))) / ((1 + gamma_e*Me**2)*((1 + (gamma_i - 1)/2*Mi**2)**(gamma_i/(gamma_i-1))))
 
     def solve_assymetric(self):
+        pass
+    def solve_can(self):
         pass
 
 

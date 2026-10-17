@@ -20,4 +20,5 @@ sys.path.append(r"../propulsion")
 from engine import Burner
 
 burner = Burner(upstream=None, component_parameters=parameters)
-burner.display_results()
+results = burner.get_results()
+print(results["geometry"])
