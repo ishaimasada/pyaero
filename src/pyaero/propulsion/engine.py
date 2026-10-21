@@ -921,6 +921,7 @@ class Turbine:
 
     def design_component(self, component_parameters):
         self.component_parameters = component_parameters
+        self.flags = self.component_parameters["flags"]
         flow = self.component_parameters["flow"]
         self.material = self.component_parameters["material"]
         self.rpm = self.component_parameters["rpm"] # Must ensure this matches the compressor rpm at each operating condition
@@ -984,8 +985,8 @@ class Turbine:
 
 
     # Report Component Design Results (plots and data)
-    def get_results(self, flags):
-        if flags["plots"]:
+    def get_results(self):
+        if self.flags["plots"]:
             # Velocity Triangles
             plt_idx = 1
             for stage in self.stages:
@@ -1017,7 +1018,7 @@ class Turbine:
             plt.savefig("Blade Sections.png")
             plt.clf()
             '''
-        if flags["data"]:
+        if self.flags["data"]:
             velocity_keys = ["V", "Vax", "Vu", "W", "Wu", "U", "Mabs", "Mrel", "alpha", "beta", "T", "P", "reaction"]
             thermo_keys = ["mdot", "Tt", "T", "Pt", "P"]
             single_geometry_keys = ["rh", "rm", "rt", "area", "stator NOB", "stator solidity", "stator h", "stator H/T", "stator cm", "rotor NOB", "rotor solidity", "rotor h", "rotor H/T", "rotor cm", "axial spacing"]
@@ -1633,7 +1634,7 @@ class AxialStage:
         self.torsional_stress = self.power / (2 * numpy.pi * self.stations[1].rhub**2 * self.Wds * self.omega)
         if self.machine.lower() == "turbine":
             # Thermal Analysis
-            tolerance = 1e-4
+            # tolerance = 1e-4
             Wmean = (self.Wds + self.Wdr) / 2
             rmean = (self.r_r + self.shaft_radius) / 2
             inner_radii = numpy.array([self.inner_radius, self.shaft_radius, rmean, self.r_r, self.stations[1].rhub])
@@ -1689,24 +1690,27 @@ class AxialStage:
                 raise RuntimeError(f"Disk solve did not converge (error {err:.2e})")
             self.sigma_h = numpy.array(sigma_h)
             self.sigma_r = numpy.array(sigma_r)
-            sigma_vm = self.von_Mises(self.sigma_h, self.sigma_r, 0) / 10**6
+            self.sigma_vm = self.von_Mises(self.sigma_h, self.sigma_r, 0) / 10**6
             # Time-Til-Fracture from Creep Analysis (LMP found using the same material, but another correlation must be found for each disk material)
-            LMP = get_LMP(sigma_vm)
-            t_rupture = 10**(LMP*(1000/Tm) - 20) #/ 3600     # array, hours
-            self.disk_time_to_fracture = t_rupture.min()      # the disk fails where it is weakest
-            self.critical_radius = inner_radii[t_rupture.argmin()]
+            LMP = get_LMP(self.sigma_vm)
+            t_rupture = 10**(LMP*(1000/Tm) - 20) # array, hours
+            self.disk_time_to_fracture = t_rupture.min() # the disk fails where it is weakest
+            self.critical_radius = inner_radii[t_rupture.argmin()] * 1000
+            self.critical_stress = self.sigma_vm[t_rupture.argmin()]
             # Plotting stresses along disk radius
             r = inner_radii * 1000
             fig, ax = plt.subplots(figsize=(8, 5))
-            ax.plot(r, self.sigma_h/1e6, "o-", label=r"$\sigma_h$ (hoop)")
-            ax.plot(r, self.sigma_r/1e6, "s-", label=r"$\sigma_r$ (radial)")
+            ax.plot(r, self.sigma_h/1e6, "s-", label=r"$\sigma_h$ (Hoop)")
+            ax.plot(r, self.sigma_r/1e6, "s-", label=r"$\sigma_r$ (Radial)")
+            ax.plot(r, self.sigma_vm, "s-", label=r"$\sigma_vm$ (Von Mises)")
+            ax.plot(self.critical_radius, self.critical_stress, "*-", label=r"Critical Stress (lowest time to fracture)", markersize=10)
             ax.axhline(0, color="k", lw=0.5)
             ax.set_xlabel("Radius (mm)")
             ax.set_ylabel("Stress (MPa)")
-            ax.set_title("Disk stresses vs radius")
+            ax.set_title("Disk Stress Distribution")
             ax.legend()
             ax.grid(alpha=0.3)
-            # plt.show()
+            plt.show()
 
 
     def E_CMSX4(self, T):
@@ -2391,14 +2395,14 @@ class Nozzle:
             self.cycle_parameters = cycle_parameters
             self.geometry = self.cycle_parameters["C/CD"]
             self.engine = self.cycle_parameters["engine"]
-            self.Pinf = self.engine.ambient.P
+            self.Pback = self.engine.ambient.P
             self.CD = self.cycle_parameters["discharge coefficient"]
             self.CV = self.cycle_parameters["velocity coefficient"]
             self.solve_exit(upstream)
             
-            # COMPONENT DESIGN
-            if component_parameters != None:
-                self.design_component(component_parameters)
+        # COMPONENT DESIGN
+        if component_parameters != None:
+            self.design_component(component_parameters)
 
     # Cycle method
     def solve_exit(self, upstream):
@@ -2412,7 +2416,7 @@ class Nozzle:
         self.inlet = upstream
         gamma = self.inlet.gamma
         critical_NPR = (1 + ((gamma-1) / 2))**(gamma / (gamma-1))
-        self.NPR = self.inlet.Pt / self.Pinf
+        self.NPR = self.inlet.Pt / self.Pback
         self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = 8 
         if self.NPR >= critical_NPR:
@@ -2420,8 +2424,8 @@ class Nozzle:
             self.exit.M = 1
         else:
             # Unchoked
-            self.exit.P = self.Pinf
-            self.exit.T = self.exit.Tt * (self.exit.P/self.exit.Pt)**((gamma - 1) / gamma)
+            self.exit.P = self.Pback
+            self.exit.T = self.exit.Tt * (self.NPR)**((gamma - 1) / gamma)
             self.exit.V = numpy.sqrt(2 * self.inlet.cp * (self.exit.Tt - self.exit.T))
             self.exit.M = self.exit.V / numpy.sqrt(gamma * self.inlet.R * self.exit.T)
         self.exit.set_statics(self.exit.M)
@@ -2431,7 +2435,7 @@ class Nozzle:
         # This function forces the throat to always be choked (CHECK THIS)
         self.inlet = upstream
         gamma = self.inlet.gamma
-        self.NPR = self.inlet.Pt / self.Pinf
+        self.NPR = self.inlet.Pt / self.Pback
         self.NPRcrit = ((gamma + 1) / 2)**(gamma / (gamma - 1))
         self.exit = copy.deepcopy(self.inlet)
         self.throat = copy.deepcopy(self.inlet)
@@ -2442,10 +2446,10 @@ class Nozzle:
             self.throat.M = 1
         else:                                        
             # Unchoked Throat
-            self.throat.M = numpy.sqrt( (2/(gamma-1)) * ((self.inlet.Pt / self.Pinf)**((gamma-1)/gamma) - 1) )
+            self.throat.M = numpy.sqrt( (2/(gamma-1)) * ((self.NPR)**((gamma-1)/gamma) - 1) )
         self.throat.set_statics(self.throat.M)
         # Exit 
-        self.exit.P = self.Pinf # (Enforcing Perfectly Expanded Flow for Optimimum Design Point Cycle)
+        self.exit.P = self.Pback # (Enforcing Perfectly Expanded Flow for Optimimum Design Point Cycle)
         self.exit.M = numpy.sqrt((2/(gamma - 1)) * ((self.exit.Pt/self.exit.P)**((gamma-1)/gamma) - 1))
         self.exit.set_statics(self.exit.M)
 
@@ -2464,16 +2468,14 @@ class Nozzle:
     def design_component(self, component_parameters):
         self.component_parameters = component_parameters
         self.type = self.component_parameters["type"]
-        W_in = self.component_parameters["inlet station"]["W"]
-        Pt_in = self.component_parameters["inlet station"]["Pt"] * 1000
-        Tt_in = self.component_parameters["inlet station"]["Tt"]
-        FAR_in = self.component_parameters["inlet station"]["FAR"]
-        M_in = self.component_parameters["inlet station"]["M"]
-        self.inlet = Station(W_in, Tt_in, Pt_in, FAR=FAR_in, M=M_in)
-        if not hasattr(self, "geometry"):
-            self.geometry = self.component_parameters["geometry"]
-        if not hasattr(self, "Pinf"):
-            self.Pinf = self.component_parameters["Pinf"] * 1000
+        self.geometry = self.component_parameters["geometry"]
+        W = self.component_parameters["W"]
+        Pt = self.component_parameters["Pt"] # Pa
+        Tt = self.component_parameters["Tt"] # K
+        FAR = self.component_parameters["FAR"]
+        M = self.component_parameters["Min"]
+        self.Pback = self.component_parameters["Pback"] # Pa
+        self.inlet = Station(W, Tt, Pt, FAR=FAR, M=M)
         match self.geometry:
             case "C": 
                 self.solve_converging(self.inlet)
@@ -2734,7 +2736,7 @@ def format_axes(ax, title, ylabel):
     ax.spines['right'].set_visible(False)
 
 
-''' Turbojet Core '''
+### Turbojet Core ###
 class Engine:
     def __init__(self, engine_parameters):
         self.spools = engine_parameters["spools"]
@@ -2945,12 +2947,13 @@ class Engine:
         with open(self.log_path, "a") as f:
             f.write(message + "\n")
 
+    def off_design(self): 
+        pass
     def optimize(self, performance_parameter): pass
     def sensitivity_study(self): pass
-    def off_design(self): pass
 
 
-''' Handles TurboFans and Variable-Bypass Ramjets '''
+### TurboFans and Variable-Bypass Ramjets ###
 class BypassEngine(Engine):
     def __init__(self, engine_parameters):
         self.spools = engine_parameters["spools"]

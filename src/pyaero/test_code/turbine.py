@@ -1,8 +1,6 @@
-''' Example usage code for turbine class '''
-
-import json
-import os
-import sys
+### Turbine Example ###
+from pyaero.propulsion.engine import Turbine
+import json, os
 
 # Change the current working directory to the file location
 filepath = os.path.abspath(__file__)
@@ -13,16 +11,12 @@ os.chdir(directory)
 with open("turbine_parameters.json", "r") as file:
     parameters = json.load(file)
 
-sys.path.append(r"../propulsion")
+# Define the log path for the turbine
+parameters["log path"] = os.path.join(directory) + r"\fpt_log.txt"
 
-# Import all types from engine module
-from engine import Turbine # type: ignore
-
-turbine = Turbine(upstream=None, compressor=None, component_parameters=parameters)
-
-# Change the current working directory to the file location
-filepath = os.path.abspath(__file__)
-directory = os.path.dirname(filepath)
-os.chdir(directory)
-
-turbine.display_results(parameters["flags"])
+# Tubrine Design
+turbine = Turbine(upstream=None, component_parameters=parameters)
+turbine.get_results()
+print(turbine.stages[0].time_to_fracture)
+print(turbine.stages[0].disk_time_to_fracture)
+print(turbine.stages[0].critical_radius)

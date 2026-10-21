@@ -103,6 +103,7 @@ class Bezier:
             return binomial_coefficient * (parameter**iterator) * ((1 - parameter)**(self.degree - iterator))
         if control_points is not None:
             self.control_points = control_points
+            self.degree = len(self.control_points) - 1
         positions = []
 
         # Iterate Through Each Parameter Step

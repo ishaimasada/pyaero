@@ -1,51 +1,85 @@
 {
     "flow": "axial",
-    "number of radii": 3,
+    "number of radii": 5,
+    "rpm": 50000,
+    "free power turbine": true,
     "specification": {
-            "ER": 2.459639,
-            "power": 22.2376,
-            "polytropic efficiency": 0.910487,
-            "rpm": 16094,
-            "W": 63.2888, 
-            "Wc": 7.97,
-            "Tt": 1656.96,
-            "Pt": 1917.97,
+            "ER": 1.81924,
+            "power": 124,
+            "polytropic efficiency": 0.91,
+            "W": 0.492, 
+            "Wc": 0.508,
+            "Tt": 1244.309,
+            "Pt": 225922,
             "R": 287.04975,
             "gamma": 1.2919,
-            "Cp": 1270.4,
-            "FAR": 0.02529046
+            "Cp": 1248.0,
+            "FAR": 0.026
     },
     "stages": [
         {
             "aerodynamics": {
-                "loading coefficient": 2.4,
-                "flow coefficient": 1,
+                "loading coefficient": 2.1,
+                "flow coefficient": 0.9,
                 "loss coefficient": 0.04, 
+                "Vax climb stator": 1.5,
+                "Vax climb rotor": 1.3,
                 "M2m": 1, 
-                "U3m": 382.633,
+                "U3m": 350,
                 "Vu1m": 0
             },
             "geometry": {
                 "rm climb rate rotor": 1.05,
                 "rm climb rate stator": 1.05,
-                "Vax climb rotor": 1.2,
-                "Vax climb stator": 1,
-                "AR stator": 0.5, 
-                "AR rotor": 0.5,
-                "Zweiffel": 0.8
+                "AR stator": 2, 
+                "AR rotor": 2,
+                "Zweiffel": 0.8,
+                "root area": 10.26405,
+                "shaft radius": 0.02,
+                "hub thickness": 0.002,
+                "bore width": 0.032
             },
             "cooling": {
                 "OTDF": 0.25, 
+                "RTDF": 1.05,
                 "CDT": 615.26, 
                 "metal TtMax": 1400,
                 "cp coolant": 1054.22,
-                "RTDF": 1.05,
-                "cooling efficiency": 0.7
+                "cooling efficiency": 0.7,
+                "packing pressure": 405,
+                "packing temperature": 300
             }
         }
     ],
+    "material":{
+        "name": "CMSX-4",
+        "density": 9100,
+        "design stress": 180,
+        "conductivity": 10.8,
+        "poisson ratio": 0.3,
+        "y": [
+                22.80415944540728, 23.677642980935875, 24.301559792027728,
+                24.967071057192374, 25.147313691507797, 26.76949740034662,
+                27.545927209705372, 28.114384748700175, 27.795493934142115,
+                27.324090121317155, 27.032928942807626, 26.51993067590988,
+                26.32582322357019, 25.896013864818023, 25.660311958405547,
+                25.410745233968804, 24.772963604852684, 24.495667244367418,
+                24.09358752166378, 23.8578856152513, 23.41421143847487,
+                23.12305025996534
+        ],
+        "x": [
+                930.0095215967633, 840.1749869294335, 773.8476395010458,
+                662.8703161826442, 650.1674304031641, 406.67146241108105,
+                298.39388300192644, 241.18646996409973, 266.97499572879303,
+                328.70531214419526, 367.38891665234837, 433.0665317205839,
+                470.1851489299852, 528.0670574582637, 570.5615758781021,
+                610.5402296585327, 702.4875883396024, 744.4726362361604,
+                800.500015266458, 832.08571689933, 873.3261623828438,
+                912.1873255528882
+        ]
+    },
     "flags": {
         "plots": false,
-        "data": false
+        "data": true
     }
 }
