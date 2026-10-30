@@ -14,4 +14,4 @@ with open("burner_parameters.json", "r") as file:
 
 burner = Burner(upstream=None, component_parameters=parameters)
 results = burner.get_results()
-burner.sensitivity(0.22, 0.28, 0.35, 0.55, 140)
+# burner.sensitivity(0.22, 0.28, 0.35, 0.55, 140)

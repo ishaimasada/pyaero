@@ -54,7 +54,7 @@
     "material":{
         "name": "CMSX-4",
         "density": 9100,
-        "design stress": 180,
+        "design stress": 800,
         "conductivity": 10.8,
         "poisson ratio": 0.3,
         "y": [

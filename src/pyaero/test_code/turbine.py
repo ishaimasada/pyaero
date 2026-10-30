@@ -14,9 +14,10 @@ with open("turbine_parameters.json", "r") as file:
 # Define the log path for the turbine
 parameters["log path"] = os.path.join(directory) + r"\fpt_log.txt"
 
-# Tubrine Design
+# Turbine Design
 turbine = Turbine(upstream=None, component_parameters=parameters)
 turbine.get_results()
 print(turbine.stages[0].time_to_fracture)
 print(turbine.stages[0].disk_time_to_fracture)
 print(turbine.stages[0].critical_radius)
+print(turbine.stages[0].critical_stress, turbine.stages[0].max_stress, turbine.stages[0].design_stress/10**6, turbine.stages[0].fail)
