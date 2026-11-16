@@ -1,9 +1,12 @@
 {
     "machine": "annular",
+    "secondary": true,
+    "inlet M": 0.3,
     "inlet Tt": 707.3,
     "inlet Pt": 2002390,
     "exit Tt": 1650,
     "exit Pt": 1917970,
+    "exit M": 0.3,
     "W": 62.011,
     "Wf": 1.71,
     "LHV": 43100000,
@@ -18,5 +21,7 @@
     "SEC number of holes": 30,
     "DIL number of holes": 30,
     "phi PRZ": 1.02,
-    "phi SEC": 0.6
+    "phi SEC": 0.6,
+    "PRZ diameter": 0.005,
+    "SEC diameter": 0.005
 }

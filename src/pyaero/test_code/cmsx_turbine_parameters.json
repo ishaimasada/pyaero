@@ -80,6 +80,7 @@
     },
     "flags": {
         "plots": false,
+        "solve structural": true,
         "data": true
     }
 }

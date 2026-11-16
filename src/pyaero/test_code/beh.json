@@ -1,0 +1,61 @@
+{
+    "flow": "axial",
+    "number of radii": 5,
+    "rpm": 48000,
+    "free power turbine": true,
+    "specification": {
+            "ER": 1.81924,
+            "power": 124,
+            "polytropic efficiency": 0.91,
+            "W": 0.5449, 
+            "Wc": 0.599,
+            "Tt": 1027,
+            "Pt": 210380,
+            "R": 287.04975,
+            "gamma": 1.2919,
+            "Cp": 1248.0,
+            "FAR": 0.027
+    },
+    "stages": [
+        {
+            "aerodynamics": {
+                "loading coefficient": 1.5,
+                "flow coefficient": 0.9,
+                "loss coefficient": 0.04, 
+                "Vax climb stator": 1.5,
+                "Vax climb rotor": 1.3,
+                "M2m": 1, 
+                "U3m": 350,
+                "Vu1m": 0
+            },
+            "geometry": {
+                "rm climb rate stator": 1,
+                "rm climb rate rotor": 1,
+                "AR stator": 2.15, 
+                "AR rotor": 2,
+                "Zweiffel": 0.8,
+                "root area": 6.45327,
+                "web relative thicknesses": [0.9, 0.75, 0.6, 0.5],
+                "relative bore width": 1.5,
+                "relative bore thickness": 1,
+                "relative shaft radius": 0.2
+            },
+            "packing": {
+                "pressure": 405,
+                "temperature": 300
+            }
+        }
+    ],
+    "material":{
+        "name": "Inconel 718",
+        "density": 8100,
+        "design stress": 800,
+        "conductivity": 11.4,
+        "poisson ratio": 0.29
+    },
+    "flags": {
+        "plots": false,
+        "solve structural": true,
+        "data": true
+    }
+}

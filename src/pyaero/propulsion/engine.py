@@ -1,6 +1,6 @@
-""" Module for Cycle Analysis and Preliminary Component Design """
+### Module for Cycle Analysis and Preliminary Component Design ###
 
-#NOTE: Axial Turbomachinery classes assumes radially-constant work distribution (dht/dr = 0) and Free Vortex Design (dVax/dr = 0)
+#NOTE: Axial Turbomachinery classes assume radially-constant work distribution (dht/dr = 0) and Free Vortex Design (dVax/dr = 0)
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -16,7 +16,7 @@ os.chdir(directory)
 
 
 class Station:
-    """ Correlations for combustion products from Walsh and Fletcher """
+    ### Correlations for combustion products from Walsh and Fletcher ###
     A = {"A0" : 992.313, "A1" : 236.688, "A2" : -1852.148, "A3" : 6083.152, "A4" : -8893.933, "A5" : 7097.112, 
          "A6" : -3234.725, "A7" : 794.571, "A8" : -81.873, "A9" : 422.178, "A10" : 1.053}
 
@@ -622,20 +622,20 @@ class Burner:
         self.exit.idx = 4
         self.exit.M = self.M_exit
         # Handle different choices for user input parameters
-        if hasattr(self.engine, "TET"):
+        if "TET" in self.engine.parameters["engine"]:
             TET = self.engine.TET
             FAR = Burner.get_FAR(TET, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta_b, self)
             self.exit.Wf = self.inlet.W * FAR
-        elif hasattr(self.engine, "Wf"):
+        elif "mdotf" in self.engine.parameters["engine"]:
             self.exit.Wf = self.engine.Wf
             FAR = self.exit.Wf / self.inlet.W
             exit_ht = self.inlet.ht + (FAR * self.eta_b * self.LHV)
             TET = self.exit.T_from_H(exit_ht, FAR, 1800, 100)
+            self.engine.TET = TET
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
         self.exit.Pt = self.inlet.Pt * (1 - self.Ptloss_b)
         self.exit.Tt = TET
         self.exit.set_statics(self.exit.M)
-        self.engine.TET = TET
 
     # Cycle method
     @staticmethod
@@ -655,6 +655,7 @@ class Burner:
     def design_component(self, component_parameters):
         self.component_parameters = component_parameters
         self.machine = component_parameters["machine"]
+        self.secondary = component_parameters["secondary"]
         self.FAR_stoichiometric = 1 / 15
         match self.machine.lower():
             case "annular":
@@ -671,12 +672,6 @@ class Burner:
     # Component Design method
     def solve_annular(self):
         # Design Parameters
-        Tt_in = self.component_parameters["inlet Tt"]
-        Pt_in = self.component_parameters["inlet Pt"]
-        Tt_exit = self.component_parameters["exit Tt"]
-        Pt_exit = self.component_parameters["exit Pt"]
-        W = self.component_parameters["W"]
-        Wf = self.component_parameters["Wf"]
         self.omega_cold = self.component_parameters["omega cold"]
         self.K_hot = self.component_parameters["K hot"]
         self.Kh = self.component_parameters["dynamic pressure ratio"]
@@ -685,11 +680,26 @@ class Burner:
         self.length = self.component_parameters["combustor length"]
         self.LHV = self.component_parameters["LHV"]
         self.Pt_loss = self.component_parameters["Pt loss"]
+        Tt_in = self.component_parameters["inlet Tt"]
+        Pt_in = self.component_parameters["inlet Pt"]
+        Tt_exit = self.component_parameters["exit Tt"]
+        Pt_exit = self.component_parameters["exit Pt"]
+        W = self.component_parameters["W"]
+        Wf = self.component_parameters["Wf"]
         phi_PRZ = self.component_parameters["phi PRZ"]
         num_holes_PRZ = self.component_parameters["PRZ number of holes"]
-        phi_SEC = self.component_parameters["phi SEC"]
-        num_holes_SEC = self.component_parameters["SEC number of holes"]
         num_holes_DIL = self.component_parameters["DIL number of holes"]
+        diameter_PRZ = self.component_parameters["PRZ diameter"]
+        if self.secondary == True:
+            if "phi SEC" not in self.component_parameters or "SEC number of holes" not in self.component_parameters or "SEC diameter" not in self.component_parameters:
+                raise ValueError("Secondary zone parameters are missing. Please provide phi SEC, SEC number of holes, and SEC diameter.")
+            else:
+                phi_SEC = self.component_parameters["phi SEC"]
+                num_holes_SEC = self.component_parameters["SEC number of holes"]
+                diameter_SEC = self.component_parameters["SEC diameter"]
+                zone_args = [phi_PRZ, num_holes_PRZ, diameter_PRZ, num_holes_DIL, phi_SEC, num_holes_SEC, diameter_SEC]
+        else:
+            zone_args = [phi_PRZ, num_holes_PRZ, diameter_PRZ, num_holes_DIL]
         # Aero-Thermal
         self.inlet = Station(W, Tt_in, Pt_in)
         self.exit = copy.deepcopy(self.inlet)
@@ -697,14 +707,14 @@ class Burner:
         self.exit.Wf = Wf
         self.exit.Tt = Tt_exit
         self.exit.Pt = Pt_exit
-        self.zones = self.calculate_distribution(phi_PRZ, num_holes_PRZ, num_holes_DIL, phi_SEC, num_holes_SEC)
         self.TR = self.exit.Tt / self.inlet.Tt
         self.omega_hot = self.K_hot * (self.TR - 1)
         self.omega_ref = self.omega_cold + self.omega_hot
         self.calculate_ref_quantities(self.omega_ref, self.Pt_loss)
         self.Pt_loss_check = self.omega_ref * (self.inlet.R/2) * (self.inlet.W * numpy.sqrt(self.inlet.Tt) / (self.Aref * self.inlet.Pt))**2
+        # Zone distribution (mass flows & hole sizing)
+        self.zones = self.solve_zones(*zone_args)
         # Geometry
-        self.size_holes()
         self.Aliner = self.liner_area_frac * self.Aref
         self.casing_r_inner = numpy.sqrt(self.casing_r_outer**2 - self.Aref / numpy.pi)
         self.dl = self.casing_r_outer - self.casing_r_inner
@@ -712,17 +722,71 @@ class Burner:
         self.liner_r_inner = self.liner_r_outer - numpy.sqrt(self.Aliner / (2 * numpy.pi))
         self.volume = self.Aref * self.length
         # Performance
-        self.OTDF = self.get_OTDF(self.length, self.dl)
-        self.tau_res = self.length / self.Vref
-        self.tau_res_ms = self.tau_res * 1000
-        self.theta_i = self.intensity_parameter(self.volume) 
-        self.theta_L = self.stability_parameter()
-        self.eta_comb = self.combustion_efficiency(self.theta_L)
+        self.solve_performance(self.dl)
         # Check Results 
         self.check_design()
 
+
     def solve_can(self):
-        pass
+        # Design Parameters
+        self.num_cans = self.component_parameters["number of cans"]
+        self.omega_cold = self.component_parameters["omega cold"]
+        self.K_hot = self.component_parameters["K hot"]
+        self.Kh = self.component_parameters["dynamic pressure ratio"]
+        self.liner_area_frac = self.component_parameters["liner area fraction"]
+        self.length = self.component_parameters["combustor length"]
+        self.LHV = self.component_parameters["LHV"]
+        self.Pt_loss = self.component_parameters["Pt loss"]
+        M_in = self.component_parameters["inlet M"]
+        Tt_in = self.component_parameters["inlet Tt"]
+        Pt_in = self.component_parameters["inlet Pt"]
+        Tt_exit = self.component_parameters["exit Tt"]
+        Pt_exit = self.component_parameters["exit Pt"]
+        M_exit = self.component_parameters["exit M"]
+        W = self.component_parameters["W"] / self.num_cans
+        Wf = self.component_parameters["Wf"] / self.num_cans
+        phi_PRZ = self.component_parameters["phi PRZ"]
+        num_holes_PRZ = self.component_parameters["PRZ number of holes"]
+        num_holes_DIL = self.component_parameters["DIL number of holes"]
+        diameter_PRZ = self.component_parameters["PRZ diameter"]
+        if self.secondary == True:
+            if "phi SEC" not in self.component_parameters or "SEC number of holes" not in self.component_parameters or "SEC diameter" not in self.component_parameters:
+                raise ValueError("Secondary zone parameters are missing. Please provide phi SEC, SEC number of holes, and SEC diameter.")
+            else:
+                phi_SEC = self.component_parameters["phi SEC"]
+                num_holes_SEC = self.component_parameters["SEC number of holes"]
+                diameter_SEC = self.component_parameters["SEC diameter"]
+                zone_args = [phi_PRZ, num_holes_PRZ, diameter_PRZ, num_holes_DIL, phi_SEC, num_holes_SEC, diameter_SEC]
+        else:
+            zone_args = [phi_PRZ, num_holes_PRZ, diameter_PRZ, num_holes_DIL]
+        # Aero-Thermal
+        self.inlet = Station(W, Tt_in, Pt_in, M=M_in)
+        self.exit = copy.deepcopy(self.inlet)
+        self.exit.W += Wf
+        self.exit.Wf = Wf
+        self.exit.Tt = Tt_exit
+        self.exit.Pt = Pt_exit
+        self.exit.set_statics(M_exit)
+        self.TR = self.exit.Tt / self.inlet.Tt
+        self.omega_hot = self.K_hot * (self.TR - 1)
+        self.omega_ref = self.omega_cold + self.omega_hot
+        self.calculate_ref_quantities(self.omega_ref, self.Pt_loss)
+        self.Pt_loss_check = self.omega_ref * (self.inlet.R/2) * (self.inlet.W * numpy.sqrt(self.inlet.Tt) / (self.Aref * self.inlet.Pt))**2
+        # Zone distribution (mass flows & hole sizing)
+        self.zones = self.solve_zones(*zone_args)
+        # Geometry
+        self.AR = self.Aref / self.inlet.area
+        self.Aliner = self.liner_area_frac * self.Aref
+        self.inlet_r = numpy.sqrt(self.inlet.area / numpy.pi)
+        self.exit_r = numpy.sqrt(self.exit.area / numpy.pi)
+        self.casing_r = numpy.sqrt(self.Aref / numpy.pi)
+        self.liner_r = numpy.sqrt(self.Aliner / numpy.pi)
+        self.volume = self.Aref * self.length
+        # Performance
+        self.solve_performance(self.liner_r*2)
+        # Check Results 
+        self.check_design()
+
 
     def solve_canannular(self):
         pass
@@ -730,15 +794,17 @@ class Burner:
 
     def calculate_ref_quantities(self, omega_ref, Pt_loss):
         self.Aref = (self.inlet.W/self.inlet.Pt) * numpy.sqrt((omega_ref * self.inlet.R * self.inlet.Tt) / (2 * Pt_loss)) 
-        if numpy.pi * self.casing_r_outer**2 <= self.Aref:
-            # Check if tip radius causes area to be smaller than reference area
-            raise ValueError(f"Tip radius is too small. Increase tip radius so that area is less than reference area ({self.Aref}m^2)")
+        if self.machine.lower() == "annular":
+            if numpy.pi * self.casing_r_outer**2 <= self.Aref:
+                # Check if tip radius causes area to be smaller than reference area
+                raise ValueError(f"Tip radius is too small. Increase tip radius so that area is less than reference area ({self.Aref}m^2)")
         rhot3 = self.inlet.Pt/(self.inlet.R*self.inlet.Tt)
         self.Vref = self.inlet.W / (rhot3 * self.Aref)
         self.q_ref = 0.5 * rhot3 * self.Vref**2
         self.Mref = self.Vref / numpy.sqrt(self.inlet.gamma * self.inlet.R * self.inlet.Tt)
 
-    def calculate_distribution(self, phi_PRZ, num_holes_PRZ, num_holes_DIL, phi_SEC=None, num_holes_SEC=None):
+
+    def solve_zones(self, phi_PRZ, num_holes_PRZ, diameter_PRZ, num_holes_DIL, phi_SEC=None, num_holes_SEC=None, diameter_SEC=None):
         self.FAR_overall = self.exit.Wf / self.inlet.W
         self.phi_overall = self.FAR_overall / self.FAR_stoichiometric
         primary = dict()
@@ -767,29 +833,43 @@ class Burner:
         dilution["phi"] = self.exit.Wf / dilution["Wa"] / self.FAR_stoichiometric
         dilution["relative addition"] = (dilution["added air"] / self.inlet.W) * 100
         zones["dilution"] = dilution
-        return zones
-
-    def size_holes(self):
+        # Hole Diameters (Lefebvre Chapter 4)
         self.Vjet = numpy.sqrt(2 * self.Kh * self.inlet.R * self.inlet.Tt)
         self.Aheff = self.Aref / numpy.sqrt(self.omega_cold)
-        self.alphas = numpy.array([self.zones[zone_key]["Wa"]/self.inlet.W/self.zones[zone_key]["num holes"] for zone_key in self.zones])
+        self.alphas = numpy.array([zones[zone_key]["Wa"]/self.inlet.W/zones[zone_key]["num holes"] for zone_key in zones])
         self.CD = 1.65 * (self.Kh - 1) / numpy.sqrt(4*self.Kh**2 - self.Kh*(2 - self.alphas)**2)
-        self.Ah = self.Aheff / self.CD
-        self.Dh = numpy.sqrt(self.Ah * 4 / numpy.pi)
-        for idx, zone_key in enumerate(self.zones):
-            self.zones[zone_key]["Dh"] = self.Dh[idx]
+        PRZ_area = (1/4) * numpy.pi * diameter_PRZ**2 * num_holes_PRZ
+        if diameter_SEC is not None:
+            SEC_area = (1/4) * numpy.pi * diameter_SEC**2 * num_holes_SEC
+            DIL_area = (self.Aheff - (self.CD[0]*PRZ_area + self.CD[1]*SEC_area)) / self.CD[2]
+            zones["secondary"]["Dh"] = diameter_SEC
+        else:
+            DIL_area = (self.Aheff - self.CD[0]*PRZ_area) / self.CD[1]
+        zones["primary"]["Dh"] = diameter_PRZ
+        zones["dilution"]["Dh"] = numpy.sqrt(DIL_area * 4 / numpy.pi / zones["dilution"]["num holes"])
+        return zones
 
-    def get_OTDF(self, length, dl):
-        return 1 - numpy.exp(1 / (self.K_OTDF * (length / dl) * self.omega_cold))
+    def solve_performance(self, D1):
+        self.tau_res = self.length / self.Vref * 1000
+        self.OTDF = self.get_OTDF(self.length, D1)
+        self.loading = self.get_loading()
+        self.intensity = self.get_intensity(self.volume)
+        self.eta_comb = self.combustion_efficiency(self.loading)
 
-    def intensity_parameter(self, volume):
-        return (self.exit.Wf * self.LHV * 1e-6) / (volume * (self.inlet.Pt/101325))
+    def get_OTDF(self, length, D1):
+        return 1 - numpy.exp(1 / (self.K_OTDF * (length / D1) * self.omega_cold))
 
-    def stability_parameter(self):
+    def get_loading(self):
+        # Walsh & Fletcher (F5.7.2)
         return self.inlet.W / (self.volume * ((self.inlet.Pt/101325)**1.8) * 10**(0.00145 * (self.inlet.Tt - 400)))
 
-    def combustion_efficiency(self, stability):
-        return (-5.46974e-10 * stability**5) + (3.97923e-8 * stability**4) - (8.73718e-6 * stability**3) + (3.00007e-4 * stability**2) - (4.568246e-3 * stability) + 99.7
+    def get_intensity(self, volume):
+        # Walsh & Fletcher (F5.7.3)
+        return (self.exit.Wf * self.LHV * 1e-6) / (volume * (self.inlet.Pt/101325))
+
+    def combustion_efficiency(self, loading):
+        # Walsh & Fletcher (F5.7.8)
+        return (-5.46974e-10 * loading**5) + (3.97923e-8 * loading**4) - (8.73718e-6 * loading**3) + (3.00007e-4 * loading**2) - (4.568246e-3 * loading) + 99.7
 
     def sensitivity(self, r_min, r_max, L_min, L_max, num_divisions):
         r_tip_vec = numpy.linspace(r_min, r_max, num_divisions)
@@ -799,9 +879,8 @@ class Burner:
         r = r_tip.copy()
         r[numpy.pi * r**2 < self.Aref] = numpy.nan
         r_hub = numpy.sqrt(r**2 - self.Aref/numpy.pi)
-        OTDF = 1 - numpy.exp(1 / (self.K_OTDF * (combustor_length / (r - r_hub)) * self.omega_cold))
-        theta_i = self.intensity_parameter(self.Aref * combustor_length)
-        # Stability Limits
+        OTDF = self.get_OTDF(combustor_length, (r - r_hub))
+        theta_i = self.get_intensity(self.Aref * combustor_length)
         feasible[(OTDF >= 0.1) & (OTDF <= 0.25) & (theta_i <= 60)] = True
         # OTDF
         fig, axes = plt.subplots(1, 3, layout="compressed", figsize=(15, 5))
@@ -811,7 +890,7 @@ class Burner:
         fig.colorbar(otdf_contour)
         # Intensity Parameter
         theta_i_contour = axes[1].contourf(r_tip, combustor_length, theta_i, levels=30)
-        axes[1].set_title("Loading Parameter") 
+        axes[1].set_title("Intensity Parameter") 
         axes[1].set_box_aspect(1)
         fig.colorbar(theta_i_contour)
         # Feasibility
@@ -826,14 +905,14 @@ class Burner:
         if self.OTDF > 0.25:
             print(f'FLAG: OTDF = {self.OTDF:.4f} exceeds 0.25. Increase Lcomb or adjust liner sizing.\n')
             all_pass = False
-        if self.theta_i > 60:
-            print(f'FLAG: theta_i = {self.theta_i:.2f} MW/(m^3*atm) exceeds 60 SLS limit. Increase volume.\n')
+        if self.intensity > 60:
+            print(f'FLAG: theta_i = {self.intensity:.2f} MW/(m^3*atm) exceeds 60 SLS limit. Increase volume.\n')
             all_pass = False
-        if self.theta_L > 5:
-            print(f'FLAG: theta_L = {self.theta_L:.4f} exceeds 5 kg/(s*atm^1.8*m^3) SLS stability limit.\n')
+        if self.loading > 10:
+            print(f'FLAG: theta_L = {self.loading:.4f} exceeds 10 kg/(s*atm^1.8*m^3) SLS stability limit.\n')
             all_pass = False
-        if self.tau_res_ms < 3:
-            print(f'FLAG: Residence time = {self.tau_res_ms:.3f} ms is below 3 ms minimum. Increase Lcomb.\n')
+        if self.tau_res < 3:
+            print(f'FLAG: Residence time = {self.tau_res:.3f} ms is below 3 ms minimum. Increase Lcomb.\n')
             all_pass = False
         if self.eta_comb < 95:
             print(f'FLAG: Combustion efficiency = {self.eta_comb:.2f} %% below 95%%. Reduce loading or increase volume.\n')
@@ -862,28 +941,38 @@ class Burner:
                 "omega ref": self.omega_ref,
                 "dPt/Pt (target)": self.Pt_loss,
                 "dPt/Pt (check from Aref)": self.Pt_loss_check,
-                "zones": self.zones,
-                "OTDF": self.OTDF,
-                "Residence time": self.tau_res_ms,
-                "intensity": self.theta_i,
-                "loading": self.theta_L,
-                "Combustion efficiency": self.eta_comb
-            },
-            "geometry": {
-                "Aref": self.Aref,
                 "Vref":  self.Vref,
                 "qref":  self.q_ref,
                 "Mref": self.Mref,
-                "Aliner": self.Aliner,
-                "casing outer radius": self.casing_r_outer,
-                "casing inner radius": self.casing_r_inner,
-                "liner outer radius": self.liner_r_outer,
-                "liner inner radius": self.liner_r_inner,
-                "combustor length": self.length,
-                "dl": self.dl,
-                "Volume": self.volume
-            }
+                "zones": self.zones,
+                "OTDF": self.OTDF,
+                "Residence time": self.tau_res,
+                "intensity": self.intensity,
+                "loading": self.loading,
+                "Combustion efficiency": self.eta_comb
+            },
         }
+        match self.machine.lower():
+            case "annular":
+                results["geometry"] = {
+                    "Aref": self.Aref,
+                    "Aliner": self.Aliner,
+                    "casing outer radius": self.casing_r_outer,
+                    "casing inner radius": self.casing_r_inner,
+                    "liner outer radius": self.liner_r_outer,
+                    "liner inner radius": self.liner_r_inner,
+                    "combustor length": self.length,
+                    "dl": self.dl,
+                    "Volume": self.volume
+                }
+            case "can":
+                results["geometry"] = {
+                    "Aref": self.Aref,
+                    "Aliner": self.Aliner,
+                    "combustor length": self.length,
+                    "radii": [self.inlet_r, self.liner_r, self.casing_r, self.exit_r],
+                    "Volume": self.volume
+                }
         return results
 
 
@@ -962,7 +1051,14 @@ class Turbine:
             else:
                 # Subsequent stages
                 parameters["upstream"] = self.stages[idx - 1].stations[3]
-            self.stages.append(AxialStage(idx, "turbine", self))
+            stage = AxialStage(idx, "turbine", self)
+            # Structural Analysis
+            if self.component_parameters["flags"]["solve structural"] == True:
+                if "material" not in self.component_parameters:
+                    raise ValueError("Need to specify material to perform structural analysis.")
+                self.material = self.component_parameters["material"]
+                stage.solve_structural()
+            self.stages.append(stage)
 
     def solve_radial(self):
         return
@@ -1260,10 +1356,6 @@ class AxialStage:
                 # AXIAL COMPRESSOR
                 self.stage_parameters = self.component_parameters["stages"][idx]
                 self.solve_compressor()
-        # Structural Analysis
-        if "material" in self.component_parameters:
-            self.material = self.component_parameters["material"]
-            self.solve_structural()
 
     def solve_turbine(self):
         # Load in stage parameters
@@ -1625,8 +1717,8 @@ class AxialStage:
         self.blade_life = self.time_til_fracture(self.centrifugal_stress/1e6, s_in.Tt)
         # Disk Life
         Wr = 1.25 * self.rotor.cax[0]
-        hr = copy.deepcopy(Wr)
-        r_r = s_in.rhub - hr
+        self.hr = copy.deepcopy(Wr)
+        r_r = s_in.rhub - self.hr
         self.rim_stress = (self.centrifugal_stress * self.rotor.NOB * self.Ah) / (2 * numpy.pi * s_in.rhub * Wr)
         bore_thickness = rel_bore_thickness * Wr
         bore_width = rel_bore_width * Wr
@@ -1642,48 +1734,13 @@ class AxialStage:
         E, alpha, theta, Tm = self.thermal_analysis(Tref, self.inner_radii, s_in)
         # Ring Element Method
         self.ring_element_method(self.inner_radii, self.widths, E, alpha, theta)
-        t_rupture = self.time_til_fracture(self.sigma_vm/1e6, Tm) # hours
-        self.disk_life = t_rupture.min() # the disk fails where it is weakest
+        self.disk_t_rupture = self.time_til_fracture(self.sigma_vm/1e6, Tm) # hours
+        self.disk_life = self.disk_t_rupture.min() # the disk fails where it is weakest
         # Checks
-        self.critical_stress = self.sigma_vm[t_rupture.argmin()]
+        self.critical_stress = self.sigma_vm[self.disk_t_rupture.argmin()]
         self.pass_fails = self.check_disk_yield(Tm, self.sigma_vm)
         # Stress Distribution 
-        r = self.inner_radii * 1000
-        _, ax = plt.subplots(2, 1, figsize=(8, 13))
-        ax[0].plot(r, self.sigma_h/1e6, "s-", label=r"$\sigma_h$ (Hoop)")
-        ax[0].plot(r, self.sigma_r/1e6, "s-", label=r"$\sigma_r$ (Radial)")
-        ax[0].plot(r, self.tau/1e6, "s-", label=r"$\tau$ (Torsional)")
-        ax[0].plot(r, self.sigma_vm/1e6, "s-", label=r"$\sigma_vm$ (Von Mises)")
-        ax[0].plot(self.inner_radii[t_rupture.argmin()] * 1000, self.critical_stress/1e6, "*-", label=r"Critical Stress (lowest time to fracture)", markersize=10)
-        ax[0].axhline(0, color="k", lw=0.5)
-        ax[0].set_xlabel("Radius (mm)")
-        ax[0].set_ylabel("Stress (MPa)")
-        ax[0].set_title("Disk Stress Distribution")
-        ax[0].legend()
-        ax[0].grid(alpha=0.3)
-        # Temperature Distribution
-        ax[1].plot(r, Tm, "s-", label=r"Mid-Element Temperature", markersize=10)
-        ax[1].axhline(0, color="k", lw=0.5)
-        ax[1].set_xlabel("Radius (mm)")
-        ax[1].set_ylabel("Temperature (K)")
-        ax[1].set_title("Disk Temperature Distribution")
-        ax[1].legend()
-        ax[1].grid(alpha=0.3)
-        # Disk Elements
-        _, element_ax = plt.subplots(figsize=(6,6))
-        for idx in range(len(self.inner_radii)):
-            if idx == len(self.inner_radii) - 1:
-                element_ax.add_patch(patches.Rectangle((self.inner_radii[idx]*1e3,-self.widths[idx]/2*1e3), hr*1e3, self.widths[idx]*1e3, linewidth=2, fill=False))
-                break
-            element_ax.add_patch(patches.Rectangle((self.inner_radii[idx]*1e3,-self.widths[idx]/2*1e3), (self.inner_radii[idx+1]-self.inner_radii[idx])*1e3, self.widths[idx]*1e3, linewidth=2, fill=False))
-        element_ax.set_xlabel("r (mm)")
-        element_ax.set_ylabel("z (mm)")
-        element_ax.set_title("Ring Elements")
-        element_ax.grid(alpha=0.3)
-        element_ax.set_xlim(0, self.inner_radii[-1]*1e3*1.2)
-        element_ax.set_ylim(-max(self.widths)/2*1e3*1.2, max(self.widths)/2*1e3*1.2)
-        element_ax.set_aspect("equal")
-        plt.show()
+        self.plot_stresses(self.inner_radii * 1000, Tm)
 
 
     def thermal_analysis(self, Tref, inner_radii, s_in):
@@ -1812,6 +1869,44 @@ class AxialStage:
         allowable_stresses = numpy.interp(T, raw_T, raw_stress)
         pass_fails = numpy.where(sigma_vm < allowable_stresses, 1, 0)
         return pass_fails
+
+
+    def plot_stresses(self, r, Tm):
+        _, ax = plt.subplots(2, 1, figsize=(8, 13))
+        ax[0].plot(r, self.sigma_h/1e6, "s-", label=r"$\sigma_h$ (Hoop)")
+        ax[0].plot(r, self.sigma_r/1e6, "s-", label=r"$\sigma_r$ (Radial)")
+        ax[0].plot(r, self.tau/1e6, "s-", label=r"$\tau$ (Torsional)")
+        ax[0].plot(r, self.sigma_vm/1e6, "s-", label=r"$\sigma_vm$ (Von Mises)")
+        ax[0].plot(self.inner_radii[self.disk_t_rupture.argmin()] * 1000, self.critical_stress/1e6, "*-", label=r"Critical Stress (lowest time to fracture)", markersize=10)
+        ax[0].axhline(0, color="k", lw=0.5)
+        ax[0].set_xlabel("Radius (mm)")
+        ax[0].set_ylabel("Stress (MPa)")
+        ax[0].set_title("Disk Stress Distribution")
+        ax[0].legend()
+        ax[0].grid(alpha=0.3)
+        # Temperature Distribution
+        ax[1].plot(r, Tm, "s-", label=r"Mid-Element Temperature", markersize=10)
+        ax[1].axhline(0, color="k", lw=0.5)
+        ax[1].set_xlabel("Radius (mm)")
+        ax[1].set_ylabel("Temperature (K)")
+        ax[1].set_title("Disk Temperature Distribution")
+        ax[1].legend()
+        ax[1].grid(alpha=0.3)
+        # Disk Elements
+        _, element_ax = plt.subplots(figsize=(6,6))
+        for idx in range(len(self.inner_radii)):
+            if idx == len(self.inner_radii) - 1:
+                element_ax.add_patch(patches.Rectangle((self.inner_radii[idx]*1e3,-self.widths[idx]/2*1e3), self.hr*1e3, self.widths[idx]*1e3, linewidth=2, fill=False))
+                break
+            element_ax.add_patch(patches.Rectangle((self.inner_radii[idx]*1e3,-self.widths[idx]/2*1e3), (self.inner_radii[idx+1]-self.inner_radii[idx])*1e3, self.widths[idx]*1e3, linewidth=2, fill=False))
+        element_ax.set_xlabel("r (mm)")
+        element_ax.set_ylabel("z (mm)")
+        element_ax.set_title("Ring Elements")
+        element_ax.grid(alpha=0.3)
+        element_ax.set_xlim(0, self.inner_radii[-1]*1e3*1.2)
+        element_ax.set_ylim(-max(self.widths)/2*1e3*1.2, max(self.widths)/2*1e3*1.2)
+        element_ax.set_aspect("equal")
+        plt.show()
 
     
     def get_DoR(self, radius_idx, machine):
@@ -2445,33 +2540,36 @@ class Afterburner:
 
 
     def solve_vee_gutter(self):
-        # "Dry Mode" is when no fuel is added --> exit gamma is the same as inlet gamma
-        # "Wet Mode" is when fuel is added --> exit gamma is not the same as inlet gamma (Tt increases from heat)
-        # Equations from Farohki (FOURTH EDITION)
+        # "Dry Mode": no fuel is added --> exit gamma is the same as inlet gamma
+        # "Wet Mode": fuel is added --> exit gamma is not the same as inlet gamma (Tt increases from heat)
+        # Equations from Farohki 
+        # Design Parameters
         self.N = self.component_parameters["num rings"]
         self.CD = self.component_parameters["drag coefficient"]
         self.eta = self.component_parameters["efficiency"]
         self.LHV = self.component_parameters["lower heating value"]
+        self.height = self.component_parameters["height"]
         self.d = self.component_parameters["base thickness"]
         self.di = self.component_parameters["inner diameter"]
-        self.alpha = self.component_parameters["apex angle"]
+        self.alpha = self.component_parameters["half angle"]
         W = self.component_parameters["inlet"]["W"]
         Tt = self.component_parameters["inlet"]["Tt"]
-        Pt = self.component_parameters["inlet"]["Pt"]
+        Pt = self.component_parameters["inlet"]["Pt"] * 1e3 # Pa
         FAR = self.component_parameters["inlet"]["FAR"]
         M = self.component_parameters["inlet"]["M"]
+        exit_Tt = self.component_parameters["Tt exit"]
+        # Pressure losses
         self.inlet = Station(W, Tt, Pt, FAR=FAR, M=M)
         self.exit = copy.deepcopy(self.inlet)
-        self.exit.Tt = self.component_parameters["Tt exit"]
-        self.exit.FAR = Burner.get_FAR(self, self.exit.Tt, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta)
-        self.q = self.exit.FAR * self.LHV * self.eta
-        # Calculations
+        self.exit.Tt = exit_Tt
+        self.exit.FAR = Burner.get_FAR(self.exit.Tt, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta, self) 
+        q = self.exit.FAR * self.LHV * self.eta
         Adry = self.get_A(0)
-        Awet = self.get_A(self.q)
-        Me_dry = self.get_Me(Adry, self.exit.gamma)
-        Me_wet = self.get_Me(Awet, self.exit.gamma)
-        self.Pt_loss_dry = self.get_loss(self.inlet.M, Me_dry, self.inlet.gamma, self.inlet.gamma)
-        self.Pt_loss_wet = self.get_loss(self.inlet.M, Me_wet, self.inlet.gamma, self.exit.gamma)
+        Awet = self.get_A(q)
+        self.Me_off = self.get_Me(Adry, self.inlet.gamma)
+        self.Me_on = self.get_Me(Awet, self.exit.gamma)
+        self.PR_dry = self.get_loss(self.inlet.M, self.Me_off, self.inlet.gamma, self.inlet.gamma)
+        self.PR_wet = self.get_loss(self.inlet.M, self.Me_on, self.inlet.gamma, self.exit.gamma)
 
     # Vee-Gutter Method
     def get_Me(self, A, gamma):
@@ -2483,9 +2581,21 @@ class Afterburner:
         gamma_i = self.inlet.gamma
         return ((1 + gamma_i*Mi**2*(1-self.CD/2)) / (gamma_i*Mi)) * numpy.sqrt(((gamma_i - 1)/(1 + (gamma_i - 1)/2*Mi**2)) * (1 / (1 + (q/self.inlet.ht))))
 
-    # Vee-Gutter Method --> Eq. 5.99
+    # Vee-Gutter Method 
     def get_loss(self, Mi, Me, gamma_i, gamma_e):
         return (1 + gamma_i*Mi**2*(1 - self.CD/2)*((1 + (gamma_e - 1)/2*Me**2)**(gamma_e/(gamma_e-1)))) / ((1 + gamma_e*Me**2)*((1 + (gamma_i - 1)/2*Mi**2)**(gamma_i/(gamma_i-1))))
+
+    def get_exit(self, toggle:str):
+        match toggle.lower():
+            case "off":
+                exit = copy.deepcopy(self.exit)
+                exit.set_statics(self.Me_off)
+                exit.Pt = self.inlet.Pt * self.PR_dry
+            case "on":
+                exit = copy.deepcopy(self.exit)
+                exit.set_statics(self.Me_on)
+                exit.Pt = self.inlet.Pt * self.PR_wet
+        return exit
 
     def solve_assymetric(self):
         pass
@@ -2858,13 +2968,17 @@ class Engine:
         if "mdot" in engine_parameters and "diameter" in engine_parameters:
             raise ValueError("Error. Cannot have two sizing parameters. Must choose either inlet mass flow or fan face diameter.")
         else:
-            if "mdot" in engine_parameters: self.W = engine_parameters["mdot"] # kg/sec
-            elif "diameter" in engine_parameters: self.diameter = engine_parameters["diameter"] # inches
+            if "mdot" in engine_parameters: 
+                self.W = engine_parameters["mdot"] # kg/sec
+            elif "diameter" in engine_parameters: 
+                self.diameter = engine_parameters["diameter"] # inches
         if "TET" in engine_parameters and "mdotf" in engine_parameters:
             raise ValueError("Error. Cannot have two burner parameters. Must choose either TET or fuel mass flow rate.")
         else:
-            if "TET" in engine_parameters: self.TET = engine_parameters["TET"] # K
-            if "mdotf" in engine_parameters: self.Wf = engine_parameters["mdotf"] # kg/sec
+            if "TET" in engine_parameters: 
+                self.TET = engine_parameters["TET"] # K
+            if "mdotf" in engine_parameters: 
+                self.Wf = engine_parameters["mdotf"] # kg/sec
 
     @property
     def components(self): return self._components
@@ -3059,6 +3173,78 @@ class Engine:
     def sensitivity_study(self): pass
 
 
+    # Flight Performance
+    # def Cdo_correlation(Cdo):
+    #     if Cdo > 0.8: return 0.02 + ((Cdo - 0.8)*0.286) + (0.02*(0.2**2))
+    #     else: return 0.02 + (0.02*(0.2**2))
+
+    # def excess_power():
+    #     thrust_loading = 0.45
+    #     wing_loading = 45 * 47.88
+    #     n = 1
+    #     beta = 1
+    #     num_points = 100
+
+    #     M = numpy.linspace(0.000001, 1, num_points)
+    #     altitude = numpy.linspace(0, 60000, num_points) * 0.3048
+    #     ambient = list(map(atmosphere, list(altitude)))
+    #     temperature, pressure, rho, a = zip(*ambient)
+    #     temperature, pressure = numpy.meshgrid(temperature, pressure)
+    #     rho, a = numpy.meshgrid(rho, a)
+    #     temperature = temperature.T
+    #     rho = rho.T
+    #     M, altitude = numpy.meshgrid(M, altitude)
+
+    #     Cdo = numpy.vectorize(Cdo_correlation)(copy.deepcopy(M))
+    #     Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
+    #     alpha = Pt_Ps * pressure / Pref
+    #     V = M * a
+    #     q = (1/2)* rho * V**2
+    #     Ps = V * ((alpha/beta)*thrust_loading - K1*wing_loading*(n**2)*beta/q - K2*n - (Cdo/(beta*wing_loading/q)))
+    #     TSFC = (0.9 + 0.3 * M) * numpy.vectorize(math.sqrt)(temperature/Tref) 
+    #     fs = Ps / alpha / TSFC
+    #     fig, ax = plt.subplots()
+    #     contour = ax.contourf(M, altitude/0.3048, fs)
+    #     cbar = fig.colorbar(contour, ax=ax)
+    #     plt.show()
+
+    # def get_thrust_loading(M, altitude, beta, wing_loading, n, K1, K2, CDR, VS, acceleration):
+    #     temperature, pressure, rho, a = atmosphere(altitude)
+    #     Cdo = numpy.vectorize(Cdo_correlation)(copy.deepcopy(M))
+    #     Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
+    #     alpha = Pt_Ps * pressure / Pref
+    #     V = M * a
+    #     q = (1/2)* rho * V**2
+    #     thrust_loading = (beta/alpha) * ((q/beta/wing_loading) * (K1 * (n*beta*wing_loading/q)**2 + K2*(n*beta*wing_loading/q) + Cdo + CDR) + (VS/V) * (acceleration/g))
+
+    #     return thrust_loading
+
+    # def constraint(data):
+    #     for idx, row in data.iterrows():
+    #         M = row["M"]
+    #         altitude = row["altitude"] * 0.3048 # m
+    #         beta = row["beta"]
+    #         n = row["n"]
+    #         VS = row["VS"]
+    #         sample_wing_loadings = numpy.linspace(20, 120, 200) * 47.88
+    #         thrust_loadings = numpy.vectorize(get_thrust_loading)(M, altitude, beta, sample_wing_loadings, n, K1, K2, CDR, VS, acceleration)
+    #         plt.scatter(sample_wing_loadings, thrust_loadings)
+    #     plt.show()
+
+    # def mission(data):
+    #     for idx, row in data.iterrows():
+    #         M = row["M"]
+    #         altitude = row["altitude"] * 0.3048 # m
+    #         beta = row["beta"]
+    #         n = row["n"]
+    #         VS = row["VS"]
+    #         temperature, pressure, rho, a = atmosphere(altitude)
+    #         Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
+    #         alpha = Pt_Ps * pressure / Pref
+    #         TSFC = (0.9 + 0.3 * M)*math.sqrt(temperature/Tref)
+    #         thrust_loading = get_thrust_loading(M, altitude, beta, wing_loading, n, K1, K2, CDR, VS, acceleration)
+
+
 ### TurboFans and Variable-Bypass Ramjets ###
 class BypassEngine(Engine):
     def __init__(self, engine_parameters):
@@ -3149,7 +3335,7 @@ class BypassEngine(Engine):
                 self.components.append(self.exhaust)
 
         # Check for an afterburner in the user input parameters
-        if "afterburner" in parameters: self.add_afterburner(parameters["afterburner"])
+        # if "afterburner" in parameters: self.add_afterburner(parameters["afterburner"])
 
     # Retrieve flow properties at every station
     def get_station_data(self): 
