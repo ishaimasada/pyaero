@@ -15,4 +15,5 @@ from pyaero.propulsion.engine import Engine
 
 # Create an instance of the Engine class
 engine = Engine(parameters)
-engine.write_performance(directory + "\cycle.xlsx")
+off_design_results = engine.solve_offdesign_point({"altitude": 0, "Mach":0}, {"TET": 1300})
+print(off_design_results)

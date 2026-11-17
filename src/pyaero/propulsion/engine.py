@@ -4,27 +4,22 @@
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import pandas, numpy, copy, os
+import pandas, numpy, json, copy, os
+from scipy.optimize import fsolve
 
 filepath = os.path.abspath(__file__)
 directory = os.path.dirname(filepath)
-parent_directory = "\\".join(directory.split("\\")[:-1])
+# parent_directory = "\\".join(directory.split("\\")[:-1])
 
 from pyaero.aerodynamics.compressible import bisection, isentropic, get_Tt_Ttstar 
-from pyaero.aerodynamics.atmosphere import Ambient 
-os.chdir(directory)
+from pyaero.aerodynamics.atmosphere import Ambient, atmosphere
 
 
 class Station:
     ### Correlations for combustion products from Walsh and Fletcher ###
-    A = {"A0" : 992.313, "A1" : 236.688, "A2" : -1852.148, "A3" : 6083.152, "A4" : -8893.933, "A5" : 7097.112, 
-         "A6" : -3234.725, "A7" : 794.571, "A8" : -81.873, "A9" : 422.178, "A10" : 1.053}
-
-    B = {"B0" : -718.874, "B1": 8747.481, "B2": -15863.157, "B3": 17254.096, "B4": -10233.795, "B5": 3081.778, 
-         "B6": -361.112, "B7": -3.919, "B8": 55.593, "B9": 1.6079}
-
+    A = {"A0" : 992.313, "A1" : 236.688, "A2" : -1852.148, "A3" : 6083.152, "A4" : -8893.933, "A5" : 7097.112, "A6" : -3234.725, "A7" : 794.571, "A8" : -81.873, "A9" : 422.178, "A10" : 1.053}
+    B = {"B0" : -718.874, "B1": 8747.481, "B2": -15863.157, "B3": 17254.096, "B4": -10233.795, "B5": 3081.778, "B6": -361.112, "B7": -3.919, "B8": 55.593, "B9": 1.6079}
     C = {"C0": 1.0001, "C1": 0.9248, "C2": -2.2078}
-    
     REFH0 = 422.2202178
     Tref = 288.15
     Pref = 101325
@@ -196,36 +191,47 @@ class Inlet:
     def __init__(self, cycle_parameters=None, component_parameters=None):
         if cycle_parameters != None:
             # CYCLE ANALYSIS
-            M_inlet = cycle_parameters["inlet M"]
-            M_exit = cycle_parameters["exit M"]
-            Pt_recovery = cycle_parameters["total pressure recovery"]
+            self.cycle_parameters = cycle_parameters
+            self.Pt_recovery = cycle_parameters["total pressure recovery"]
             engine = cycle_parameters["engine"]
             freestream = engine.ambient
 
             if hasattr(engine, "diameter"):
-                D1 = engine.diameter * 2.54 / 100 # in to m
-                [_, Tt_T, Pt_P, rhot_rho, _] = isentropic(M_inlet, freestream.gamma, lookup_key="M")
-                T1 = (1/Tt_T) * freestream.Tt
-                a1 = numpy.sqrt(freestream.gamma * freestream.R * T1)
-                V1 = M_inlet * a1
-                A1 = numpy.pi * (D1 / 2)**2
-                rho1 = freestream.rhot * (1/rhot_rho)
-                W1 = V1 * rho1 * A1
+                M_exit = cycle_parameters["exit M"]
+                D2 = engine.diameter * 2.54 / 100 # in to m
+                [_, Tt_T, Pt_P, rhot_rho, _] = isentropic(M_exit, freestream.gamma, lookup_key="M")
+                T2 = (1/Tt_T) * freestream.Tt
+                a2 = numpy.sqrt(freestream.gamma * freestream.R * T2)
+                V2 = M_exit * a2
+                A2 = numpy.pi * (D2 / 2)**2
+                rho2 = freestream.rhot * (1/rhot_rho)
+                W2 = V2 * rho2 * A2
             elif hasattr(engine, "W"):
-                W1 = engine.W
+                W2 = engine.W
 
             FAR = 0
-            self.freestream = Station(W1, freestream.Tt, freestream.Pt, FAR, M=freestream.Minf, idx=0) # Station 0
-            self.inlet = Station(W1, freestream.Tt, freestream.Pt, FAR, M=M_inlet, idx=1) # Station 1
+            self.freestream = Station(W2, freestream.Tt, freestream.Pt, FAR, M=freestream.Minf, idx=0) # Station 0
+            self.inlet = Station(W2, freestream.Tt, freestream.Pt, FAR, idx=1) # Station 1
+            if "M inlet" in cycle_parameters:
+                M_inlet = cycle_parameters["inlet M"]
+                self.inlet.set_statics(M_inlet)
             
             # Check if it's a BypassEngine
             if isinstance(engine, BypassEngine):
-                bypass_W = W1*engine.B / (engine.B+1)
-                root_W = W1 - bypass_W
-                self.bypass_exit = Station(bypass_W, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=1.2)
-                self.root_exit = Station(root_W, freestream.Tt, freestream.Pt, FAR, M=M_exit, idx=2)
+                bypass_W = W2*engine.B / (engine.B+1)
+                root_W = W2 - bypass_W
+                self.bypass_exit = Station(bypass_W, freestream.Tt, freestream.Pt, FAR, idx=1.2)
+                self.root_exit = Station(root_W, freestream.Tt, freestream.Pt, FAR, idx=2)
+                if "root M exit" in cycle_parameters and "bypass M exit" in cycle_parameters:
+                    Mroot_exit = cycle_parameters["root exit M"]
+                    Mbypass_exit = cycle_parameters["bypass exit M"]
+                    self.root_exit.set_statics(Mroot_exit)
+                    self.bypass_exit.set_statics(Mbypass_exit)
             else:
-                self.exit = Station(W1, freestream.Tt, freestream.Pt*Pt_recovery, FAR, M=M_exit, idx=2) # Station 1
+                self.exit = Station(W2, freestream.Tt, freestream.Pt*self.Pt_recovery, FAR, idx=2) # Station 1
+                if "M exit" in cycle_parameters:
+                    M_exit = cycle_parameters["exit M"]
+                    self.exit.set_statics(M_exit)
 
         if component_parameters != None: 
             # COMPONENT DESIGN
@@ -302,21 +308,23 @@ class Compressor:
                 self.B = self.engine.B
                 self.rootPR = cycle_parameters["root PR"]
                 self.tipPR = cycle_parameters["tip PR"]
-                Mroot_exit = cycle_parameters["root exit M"]
-                Mtip_exit = cycle_parameters["tip exit M"]
                 self.root_inlet = copy.deepcopy(upstream)
                 self.tip_inlet = copy.deepcopy(tip_upstream)
                 self.root_inlet.idx = "2"
                 self.tip_inlet.idx = "1.2"
-                self.root_exit = self.solve_exit(self.root_inlet, "2.05", self.rootPR, 0, 0, Mroot_exit)
-                self.tip_exit = self.solve_exit(self.tip_inlet, "1.3", self.tipPR, 0, 0, Mtip_exit)
+                self.root_exit = self.solve_exit(self.root_inlet, "2.05", self.rootPR, 0, 0)
+                self.tip_exit = self.solve_exit(self.tip_inlet, "1.3", self.tipPR, 0, 0)
                 root_delta_ht = self.root_exit.ht - self.root_inlet.ht
                 tip_delta_ht = self.tip_exit.ht - self.tip_inlet.ht
                 self.delta_ht = root_delta_ht + tip_delta_ht
                 self.power = (self.root_inlet.W*root_delta_ht) + (self.tip_inlet.W*tip_delta_ht)
+                if "root M exit" in cycle_parameters and "tip M exit" in cycle_parameters:
+                    Mroot_exit = cycle_parameters["root exit M"]
+                    Mtip_exit = cycle_parameters["tip exit M"]
+                    self.root_exit.set_statics(Mroot_exit)
+                    self.tip_exit.set_statics(Mtip_exit)
             else:
                 # Compressor
-                M_exit = cycle_parameters["exit M"]
                 inlet_idx = cycle_parameters["inlet idx"]
                 exit_idx = cycle_parameters["exit idx"]
                 self.cooling = cycle_parameters["cooling"]
@@ -324,22 +332,25 @@ class Compressor:
                 self.PR = cycle_parameters["PR"]
                 self.inlet = upstream
                 self.inlet.idx = inlet_idx
-                self.exit = self.solve_exit(self.inlet, exit_idx, self.PR, self.cooling, self.packing, M_exit)
+                self.exit = self.solve_exit(self.inlet, exit_idx, self.PR, self.cooling, self.packing)
                 self.delta_ht =  (self.exit.cp*self.exit.Tt) - (self.inlet.cp*self.inlet.Tt)
                 self.power = self.inlet.W * self.delta_ht
+                if "M exit" in cycle_parameters:
+                    M_exit = cycle_parameters["exit M"]
+                    self.exit.set_statics(M_exit)
 
         # COMPONENT DESIGN
         if component_parameters != None:
             self.design_component(component_parameters)
 
-    def solve_exit(self, inlet, exit_idx, PR, cooling, packing, M_exit):
+    def solve_exit(self, inlet, exit_idx, PR, cooling, packing, M_exit=None):
         exit = copy.deepcopy(inlet)
         exit.idx = exit_idx
-        exit.M = M_exit
         exit.W = inlet.W * (1 - cooling - packing)
         exit.Pt = inlet.Pt * PR
         exit.Tt = inlet.Tt * (PR)**((inlet.gamma - 1) / (inlet.gamma*self.e_t))
-        exit.set_statics(exit.M)
+        if M_exit is not None:
+            exit.set_statics(M_exit)
         return exit
 
     def design_component(self, component_parameters):
@@ -606,27 +617,28 @@ class Burner:
         if cycle_parameters != None:
             self.Ptloss_b = cycle_parameters["total pressure loss"]
             self.eta_b = cycle_parameters["efficiency"]
-            self.M_exit = cycle_parameters["exit M"]
             self.engine = cycle_parameters["engine"]
             self.LHV = self.engine.LHV
             self.solve_exit(upstream)
+            if "M exit" in cycle_parameters:
+                M_exit = cycle_parameters["exit M"]
+                self.exit.set_statics(M_exit)
 
         # COMPONENT DESIGN
         if component_parameters != None:
             self.design_component(component_parameters)
     
     # For Cycle Analaysis (not component design)
-    def solve_exit(self, upstream):
+    def solve_exit(self, upstream, M_exit=None):
         self.inlet = upstream
         self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = 4
-        self.exit.M = self.M_exit
         # Handle different choices for user input parameters
-        if "TET" in self.engine.parameters["engine"]:
+        if "TET" in self.engine.parameters:
             TET = self.engine.TET
             FAR = Burner.get_FAR(TET, self.inlet.Tt, self.inlet.FAR, self.LHV, self.eta_b, self)
             self.exit.Wf = self.inlet.W * FAR
-        elif "mdotf" in self.engine.parameters["engine"]:
+        elif "mdotf" in self.engine.parameters:
             self.exit.Wf = self.engine.Wf
             FAR = self.exit.Wf / self.inlet.W
             exit_ht = self.inlet.ht + (FAR * self.eta_b * self.LHV)
@@ -635,7 +647,8 @@ class Burner:
         self.exit.W = self.inlet.W * (1 + self.exit.FAR)
         self.exit.Pt = self.inlet.Pt * (1 - self.Ptloss_b)
         self.exit.Tt = TET
-        self.exit.set_statics(self.exit.M)
+        if M_exit is not None:
+            self.exit.set_statics(M_exit)
 
     # Cycle method
     @staticmethod
@@ -989,7 +1002,9 @@ class Turbine:
             self.eta_m = self.cycle_parameters["mechanical efficiency"]
             self.power = abs(self.compressor.power) / self.eta_m
             self.exit_idx = self.cycle_parameters["exit idx"]
-            self.M_exit = self.cycle_parameters["exit M"]
+            if "M exit" in cycle_parameters:
+                M_exit = cycle_parameters["exit M"]
+                self.exit.set_statics(M_exit)
             self.cycle_parameters = self.cycle_parameters
             self.solve_exit()
         elif component_parameters != None:
@@ -997,20 +1012,20 @@ class Turbine:
             self.design_component(component_parameters)
 
     # Turbine Cycle Analysis (design-point)
-    def solve_exit(self, upstream=None):
+    def solve_exit(self, upstream=None, M_exit=None):
         if upstream != None:
             self.inlet = upstream
         else:
             self.inlet = self.upstream
         self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = self.exit_idx
-        self.exit.M = self.M_exit
         self.exit.W = self.inlet.W + self.mdot_cool
         exit_ht = (self.inlet.ht * self.inlet.W - (self.power/self.eta_m)) / self.exit.W
         self.exit.Tt = self.inlet.T_from_H(exit_ht, self.exit.FAR, self.engine.TET, 100)
         self.ER = (self.exit.Tt  / self.inlet.Tt)**(-self.inlet.gamma / ((self.inlet.gamma - 1)*self.e_t))
         self.exit.Pt = self.inlet.Pt / self.ER
-        self.exit.set_statics(self.exit.M)
+        if M_exit is not None:
+            self.exit.set_statics(M_exit)
 
     def design_component(self, component_parameters):
         self.component_parameters = component_parameters
@@ -1474,7 +1489,7 @@ class AxialStage:
         self.running_ER = numpy.prod(numpy.append(numpy.array([stage.ER for stage in self.component.stages]), self.ER))
         self.work_split = self.delta_ht / (self.component.delta_ht/1000)
         self.running_work_split = numpy.prod(numpy.append(numpy.array([stage.work_split for stage in self.component.stages]), self.work_split))
-        self.capacity = self.upstream.W * numpy.sqrt(self.upstream.Tt) / (self.upstream.Pt / 101.325)
+        self.capacity = self.upstream.W * numpy.sqrt(self.upstream.Tt / Station.Tref) / (self.upstream.Pt / Station.Pref)
 
         # Check Results
         valid_design = True
@@ -1635,7 +1650,7 @@ class AxialStage:
         self.running_PR = numpy.prod(numpy.append(numpy.array([stage.PR for stage in self.component.stages]), self.PR))
         self.work_split = self.delta_ht / self.component.delta_ht
         self.running_work_split = numpy.sum(numpy.append(numpy.array([stage.work_split for stage in self.component.stages]), self.work_split))
-        self.capacity = upstream.W * numpy.sqrt(upstream.Tt) / (upstream.Pt / 101.325)
+        self.capacity = upstream.W * numpy.sqrt(upstream.Tt / Station.Tref) / (upstream.Pt / Station.Pref)
 
         # Check Results
         valid_design = True
@@ -1862,10 +1877,10 @@ class AxialStage:
                 raw_T = numpy.array([294.3, 588.7, 810.9, 922.0, 977.6, 1033.2, 1088.7])  # K
                 raw_stress = numpy.array([1124., 1076., 1020., 965., 931., 800., 690.]) * 1e6  # Pa
             case _:
-                raise NotImplementedError(f"No yield strength data for material '{material}'.")
+                raise NotImplementedError(f"No yield strength data for material '{self.material['name']}'.")
         T = numpy.asarray(T)
         if T.min() < raw_T[0] or T.max() > raw_T[-1]:
-            raise ValueError(f"Temperature outside data range for {material} ({raw_T[0]:.0f}-{raw_T[-1]:.0f} K).")
+            raise ValueError(f"Temperature outside data range for {self.material['name']} ({raw_T[0]:.0f}-{raw_T[-1]:.0f} K).")
         allowable_stresses = numpy.interp(T, raw_T, raw_stress)
         pass_fails = numpy.where(sigma_vm < allowable_stresses, 1, 0)
         return pass_fails
@@ -2604,7 +2619,7 @@ class Afterburner:
 
 
 class Nozzle:
-    def __init__(self, upstream:Station, cycle_parameters=None, component_parameters=None):
+    def __init__(self, upstream:Station, cycle_parameters=None, offdesign_parameter=None, component_parameters=None):
         if cycle_parameters != None:
             # CYCLE ANALYSIS
             self.cycle_parameters = cycle_parameters
@@ -2623,22 +2638,26 @@ class Nozzle:
     def solve_exit(self, upstream):
         # Handle Converging or Converging-Diverging nozzle geometries
         match self.geometry:
-            case "C": self.solve_converging(upstream)
-            case "CD": self.solve_CD(upstream)
+            case "C": 
+                self.solve_converging(upstream)
+            case "CD": 
+                self.solve_CD(upstream)
 
     # Cycle method
     def solve_converging(self, upstream):
         self.inlet = upstream
         gamma = self.inlet.gamma
-        critical_NPR = (1 + ((gamma-1) / 2))**(gamma / (gamma-1))
+        self.critical_NPR = (1 + ((gamma-1) / 2))**(gamma / (gamma-1))
         self.NPR = self.inlet.Pt / self.Pback
         self.exit = copy.deepcopy(self.inlet)
         self.exit.idx = 8 
-        if self.NPR >= critical_NPR:
+        if self.NPR >= self.critical_NPR:
             # Choked
+            self.choked = True
             self.exit.M = 1
         else:
             # Unchoked
+            self.choked = False
             self.exit.P = self.Pback
             self.exit.T = self.exit.Tt * (1/self.NPR)**((gamma - 1) / gamma)
             self.exit.V = numpy.sqrt(2 * self.inlet.cp * (self.exit.Tt - self.exit.T))
@@ -2658,9 +2677,11 @@ class Nozzle:
         self.exit.idx = 9
         if self.NPR >= self.NPRcrit:
             # Choked Throat
+            self.choked = True
             self.throat.M = 1
         else:                                        
             # Unchoked Throat
+            self.choked = False
             self.throat.M = numpy.sqrt( (2/(gamma-1)) * ((self.NPR)**((gamma-1)/gamma) - 1) )
         self.throat.set_statics(self.throat.M)
         # Exit 
@@ -2725,6 +2746,16 @@ class Nozzle:
 
     def get_results(self):
         return list(zip(self.r_coords, self.z_coords))
+
+    # Off-Design Residual
+    def choked_Wc(self, A8):
+        gamma = self.inlet.gamma
+        return A8 * self.inlet.Pt / numpy.sqrt(self.inlet.Tt) * numpy.sqrt(2 * gamma / (self.inlet.R * (gamma - 1)) * ((1/self.NPR)**(2 / gamma) - (1/self.NPR)**((gamma + 1) / gamma)))
+
+    # Off-Design Residual
+    def unchoked_Wc(self, A8):
+        gamma = self.inlet.gamma
+        return A8 * self.inlet.Pt / numpy.sqrt(self.inlet.Tt) * numpy.sqrt(gamma / self.inlet.R) * (2 / (gamma + 1)) ** ((gamma + 1) / (2 * (gamma - 1)))
 
 
 class Recuperator:
@@ -2938,47 +2969,34 @@ class Recuperator:
         return results
 
 
-def format_axes(ax, title, ylabel):
-    ax.set_title(title, fontsize=14, weight='bold')
-    ax.set_ylabel(ylabel, fontsize=12)
-    ax.legend(frameon=False, loc="best")
-    # Grid control
-    ax.minorticks_on()
-    ax.grid(True, which='major', linestyle='--', linewidth=0.7, alpha=0.7)
-    ax.grid(True, which='minor', linestyle=':', linewidth=0.5, alpha=0.5)
-    # Clean spines
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+class Map:
+    def __init__(self, map_data:dict, beta_d=5):
+        self.data = map_data
+        self.beta_d = beta_d
+        # To interpolate between speeds as well as beta
+        pairs = sorted((float(speed_key), speed_key) for speed_key in map_data)
+        self.speeds = numpy.array([pair[0] for pair in pairs])
+        self._keys = [pair[1] for pair in pairs]
+        self.Wc_scale_factor = self.PR_scale_factor = self.e_scale_factor = 1 # Defaults
 
+    def get_raw_state(self, N, beta):
+        v = numpy.array([[numpy.interp(beta, self.data[key]["beta"], self.data[key][parameter]) for parameter in ("Wc", "PR", "e")] for key in self._keys])
+        return tuple(numpy.interp(N, self.speeds, v[:, i]) for i in range(3))
+
+    def scale_map(self, design_Wc, design_PR, design_e):
+        Wc, PR, e = self.get_raw_state(1.0, self.beta_d)
+        self.Wc_scale_factor = design_Wc / Wc
+        self.PR_scale_factor = (design_PR-1) / (PR-1)
+        self.e_scale_factor = design_e / e
+
+    def get_scaled_state(self, N, beta):
+        Wc, PR, e = self.get_raw_state(N, beta)
+        return self.Wc_scale_factor * Wc, 1 + self.PR_scale_factor*(PR-1), self.e_scale_factor * e
 
 ### Turbojet Core ###
 class Engine:
-    def __init__(self, engine_parameters):
-        self.spools = engine_parameters["spools"]
-        self.LHV = engine_parameters["LHV"]
-        self.Minf = engine_parameters["Minf"]
-        self.altitude = engine_parameters["altitude"]
-        self.ambient = Ambient(self.altitude, Minf=self.Minf)
-
-        # Handle user errors in engine parameters
-        if "log path" in engine_parameters:
-            self.log_path = engine_parameters["log path"]
-        else:
-            raise ValueError("Must include log filepath in engine parameters.")
-        if "mdot" in engine_parameters and "diameter" in engine_parameters:
-            raise ValueError("Error. Cannot have two sizing parameters. Must choose either inlet mass flow or fan face diameter.")
-        else:
-            if "mdot" in engine_parameters: 
-                self.W = engine_parameters["mdot"] # kg/sec
-            elif "diameter" in engine_parameters: 
-                self.diameter = engine_parameters["diameter"] # inches
-        if "TET" in engine_parameters and "mdotf" in engine_parameters:
-            raise ValueError("Error. Cannot have two burner parameters. Must choose either TET or fuel mass flow rate.")
-        else:
-            if "TET" in engine_parameters: 
-                self.TET = engine_parameters["TET"] # K
-            if "mdotf" in engine_parameters: 
-                self.Wf = engine_parameters["mdotf"] # kg/sec
+    def __init__(self, parameters):
+        self.set_design_point(parameters)
 
     @property
     def components(self): return self._components
@@ -2986,9 +3004,32 @@ class Engine:
     @components.setter
     def components(self, value): self._components = value
 
-    def set_components(self, parameters):
+    def set_design_point(self, parameters):
+        # Handle user errors in engine parameters
+        if "log path" in parameters:
+            self.log_path = parameters["log path"]
+        else:
+            self.log_path = "engine_log.txt"
+        if "mdot" in parameters and "diameter" in parameters:
+            raise ValueError("Error. Cannot have two sizing parameters. Must choose either inlet mass flow or fan face diameter.")
+        else:
+            if "mdot" in parameters: 
+                self.W = parameters["mdot"] # kg/sec
+            elif "diameter" in parameters: 
+                self.diameter = parameters["diameter"] # inches
+        if "TET" in parameters and "mdotf" in parameters:
+            raise ValueError("Error. Cannot have two burner parameters. Must choose either TET or fuel mass flow rate.")
+        else:
+            if "TET" in parameters: 
+                self.TET = parameters["TET"] # K
+            if "mdotf" in parameters: 
+                self.Wf = parameters["mdotf"] # kg/sec
+        self.spools = parameters["spools"]
+        self.LHV = parameters["LHV"]
+        self.Minf = parameters["Minf"]
+        self.altitude = parameters["altitude"]
+        self.ambient = Ambient(self.altitude, Minf=self.Minf)
         self.parameters = parameters
-
         # Include the engine object in each set of component parameters
         for component_name in parameters:
             if isinstance(parameters[component_name], dict):
@@ -2997,41 +3038,35 @@ class Engine:
                 for component_parameters in parameters[component_name]:
                     component_parameters["engine"] = self
         self.components = []
-
         # Inlet
         self.inlet = Inlet(parameters["intake"])
         self.components.append(self.inlet)
-
         # Compressors
         self.compressors = []
         for idx, compressor_parameters in enumerate(parameters["compressors"]):
             compressor = Compressor(self.components[idx].exit, compressor_parameters)
             self.components.append(compressor)
             self.compressors.append(compressor)
-
         # Burner
         self.burner = Burner(self.components[-1].exit, parameters["burner"])
         self.components.append(self.burner)
-
         # Turbines
         self.turbines = []
         for idx, turbine_parameters in enumerate(parameters["turbines"]):
             turbine = Turbine(self.components[idx + len(self.compressors) + 1].exit, self.compressors[len(self.compressors)-1-idx], turbine_parameters)
             self.components.append(turbine)
             self.turbines.append(turbine)
-
         # Afterburner
         if "afterburner" in parameters: 
             self.afterburner = Afterburner(self.components[-1].exit, parameters["afterburner"])
             self.components.append(self.afterburner)
-
         # Nozzle
-        if "exhaust" in parameters:
-            self.exhaust = Nozzle(self.components[-1].exit, parameters["exhaust"])
-            self.components.append(self.exhaust)
-
+        # if "exhaust" in parameters:
+        self.exhaust = Nozzle(self.components[-1].exit, parameters["exhaust"])
+        self.components.append(self.exhaust)
         # Recuperator
-        if "recuperator" in parameters: self.add_recuperator(parameters["recuperator"])
+        if "recuperator" in parameters: 
+            self.add_recuperator(parameters["recuperator"])
 
     # Add a recuperator to the engine
     def add_recuperator(self, parameters):
@@ -3048,6 +3083,68 @@ class Engine:
                 component.solve_exit(self.components[idx - 1].exit)
         self.components.insert(insert_idx, recuperator)
         self.recuperator = recuperator
+
+
+    def calculate_residuals(self, iterators:list, operating_condition:dict, throttle_setting:dict): 
+        # Design Parameters
+        altitude = operating_condition["altitude"]
+        Mach = operating_condition["Mach"]
+        beta = iterators[0]
+        off_parameters = copy.deepcopy(self.parameters)
+        off_parameters["altitude"] = altitude
+        off_parameters["Minf"] = Mach
+        off_parameters["beta"] = beta
+        if "TET" in throttle_setting:
+            TET = throttle_setting["TET"]
+            N = iterators[1]
+        elif "N" in throttle_setting:
+            N = throttle_setting["N"]
+            TET = iterators[1]
+        else:
+            raise ValueError("Must input either TET or N for throttle setting.")
+        off_parameters["TET"] = TET
+        # Update off-design parameters with Compressor Map Values
+        Wc, PRc, ec = self.compressor_map.get_scaled_state(N, beta)
+        ambient = Ambient(altitude, Minf=Mach)
+        W = Wc * (ambient.Pt*self.inlet.Pt_recovery)/Station.Pref / numpy.sqrt(ambient.Tt/Station.Tref)
+        off_parameters["mdot"] = W
+        off_parameters["compressors"][0]["PR"] = PRc
+        off_parameters["compressors"][0]["e"] = ec
+        # Design Point Reference Values
+        A8 = self.exhaust.exit.area # converging nozzle for now
+        capacity = self.turbines[0].inlet.Wc
+        # Off-Design
+        off_design = Engine(off_parameters)
+        # Residuals
+        mass_flow = capacity * (off_design.turbines[0].inlet.Pt/Station.Pref) / numpy.sqrt(off_design.turbines[0].inlet.Tt/Station.Tref)
+        if off_design.exhaust.choked == True:
+            nozzle_Wc = off_design.exhaust.choked_Wc(A8)
+        else:
+            nozzle_Wc = off_design.exhaust.unchoked_Wc(A8)
+        nozzle_flow = nozzle_Wc * (off_design.exhaust.inlet.Pt/Station.Pref) / numpy.sqrt(off_design.exhaust.inlet.Tt/Station.Tref)
+        turbine_residual = (off_design.exhaust.inlet.W - mass_flow) / mass_flow
+        nozzle_residual = (nozzle_flow - mass_flow) / mass_flow
+        return numpy.array([turbine_residual, nozzle_residual]), off_design
+
+
+    def solve_offdesign_point(self, operating_condition, throttle_setting, iterators=None):
+        tolerance = 1e-6
+        if not hasattr(self, "compressor_map"):
+            with open(directory + "\compressor_map.json", "r") as file:
+                map_data = json.load(file)
+            self.compressor_map = Map(map_data)
+            self.compressor_map.scale_map(self.inlet.exit.Wc, self.compressors[0].PR, self.compressors[0].e_t)
+        if iterators is None:
+            # Default states
+            if "TET" in throttle_setting:
+                iterators = [self.compressor_map.beta_d, 1]
+            elif "N" in throttle_setting:
+                iterators = [self.compressor_map.beta_d, self.burner.exit.Tt]
+        solution, _, converged, message = fsolve(lambda x: self.calculate_residuals(x, operating_condition, throttle_setting)[0], iterators, full_output=True, xtol=1e-10)
+        residuals, off_design = self.calculate_residuals(solution, operating_condition, throttle_setting)
+        if converged != 1 or numpy.max(abs(residuals)) > tolerance:
+            raise RuntimeError(f"No convergence {list(throttle_setting.values())[0]:.4f}: {message}")
+        return off_design.solve_performance()
 
 
     # Retrieve flow properties at every station
@@ -3086,7 +3183,7 @@ class Engine:
 
 
     # Retrieve flow properties at every station
-    def write_performance(self, filename): 
+    def solve_performance(self, filename=None): 
         # Performance Parameters
         station_data = self.get_station_data()
         W = station_data["W [kg/sec]"].values
@@ -3119,18 +3216,36 @@ class Engine:
                                          "Thermal Efficiency": eta_th,
                                          "Overall Efficiency": eta_o
                                         }, index=[0])
-        with pandas.ExcelWriter(filename) as writer:
-            station_data.to_excel(writer, sheet_name="cycle", index=False)
-            performance.to_excel(writer, sheet_name="performance", index=False)
+        if filename is not None:
+            with pandas.ExcelWriter(filename) as writer:
+                station_data.to_excel(writer, sheet_name="cycle", index=False)
+                performance.to_excel(writer, sheet_name="performance", index=False)
+        else:
+            return performance
+
+
+    @staticmethod
+    def format_axes(ax, title, ylabel):
+        ax.set_title(title, fontsize=14, weight='bold')
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.legend(frameon=False, loc="best")
+        # Grid control
+        ax.minorticks_on()
+        ax.grid(True, which='major', linestyle='--', linewidth=0.7, alpha=0.7)
+        ax.grid(True, which='minor', linestyle=':', linewidth=0.5, alpha=0.5)
+        # Clean spines
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
 
 
     # Plot the temperatures and pressures throughout the whole engine
     def plot_thermo(self):
-        Tt = self.get_station_data()["Tt [K]"]
-        Ts = self.get_station_data()["Ts [K]"]
-        Pt = self.get_station_data()["Pt [kPa]"]
-        Ps = self.get_station_data()["Ps [kPa]"]
-        stations = self.get_station_data()["Station"]
+        station_data = self.get_station_data()
+        Tt = station_data["Tt [K]"]
+        Ts = station_data["Ts [K]"]
+        Pt = station_data["Pt [kPa]"]
+        Ps = station_data["Ps [kPa]"]
+        stations = station_data["Station"]
         marker = "o"
         size = 4
         color = "white"
@@ -3142,11 +3257,11 @@ class Engine:
         # Temperatures
         axes[0].plot(stations, Tt, marker=marker, markersize=size, markerfacecolor=color, markeredgewidth=edge, linewidth=width, label="Total Temperature")
         axes[0].plot(stations, Ts, marker=marker, markersize=size, markerfacecolor=color, markeredgewidth=edge, linewidth=width, label="Static Temperature")
-        format_axes(axes[0], "Temperature", "Temperature [K]")
+        Engine.format_axes(axes[0], "Temperature", "Temperature [K]")
         # Pressures
         axes[1].plot(stations, Pt, marker=marker, markersize=size, markerfacecolor=color, markeredgewidth=edge, linewidth=width, label="Total Pressure")
         axes[1].plot(stations, Ps, marker=marker, markersize=size, markerfacecolor=color, markeredgewidth=edge, linewidth=width, label="Static Pressure")
-        format_axes(axes[1], "Pressure", "Pressure [kPa]")
+        Engine.format_axes(axes[1], "Pressure", "Pressure [kPa]")
         axes[1].set_xlabel("Station", fontsize=11)
         plt.tight_layout()
         plt.show()
@@ -3167,82 +3282,94 @@ class Engine:
         with open(self.log_path, "a") as f:
             f.write(message + "\n")
 
-    def off_design(self): 
-        pass
+    ### FLIGHT PERFORMANCE ###
+    @staticmethod
+    def Cdo_correlation(Cdo):
+        if Cdo > 0.8: return 0.02 + ((Cdo - 0.8)*0.286) + (0.02*(0.2**2))
+        else: return 0.02 + (0.02*(0.2**2))
+
+    @staticmethod
+    def excess_power(thrust_loading, wing_loading, n, beta, num_points, K1, K2):
+        # thrust_loading = 0.45
+        # wing_loading = 45 * 47.88
+        # n = 1
+        # beta = 1
+        # num_points = 100
+        M = numpy.linspace(0.000001, 1, num_points)
+        altitude = numpy.linspace(0, 60000, num_points) * 0.3048
+        ambient = list(map(atmosphere, list(altitude)))
+        temperature, pressure, rho, a = zip(*ambient)
+        temperature, pressure = numpy.meshgrid(temperature, pressure)
+        Tref, Pref, _, _ = atmosphere(0)
+        rho, a = numpy.meshgrid(rho, a)
+        temperature = temperature.T
+        rho = rho.T
+        M, altitude = numpy.meshgrid(M, altitude)
+        gamma = 1.4
+        Cdo = numpy.vectorize(Engine.Cdo_correlation)(copy.deepcopy(M))
+        Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
+        alpha = Pt_Ps * pressure / Pref
+        V = M * a
+        q = (1/2)* rho * V**2
+        Ps = V * ((alpha/beta)*thrust_loading - K1*wing_loading*(n**2)*beta/q - K2*n - (Cdo/(beta*wing_loading/q)))
+        TSFC = (0.9 + 0.3 * M) * numpy.vectorize(numpy.sqrt)(temperature/Tref) 
+        fs = Ps / alpha / TSFC
+        fig, ax = plt.subplots()
+        contour = ax.contourf(M, altitude/0.3048, fs)
+        cbar = fig.colorbar(contour, ax=ax)
+        # plt.show()
+
+    @staticmethod
+    def get_thrust_loading(M, altitude, beta, wing_loading, n, K1, K2, CDR, VS, acceleration):
+        temperature, pressure, rho, a = atmosphere(altitude)
+        Tref, Pref, _, _ = atmosphere(0)
+        gamma = 1.4
+        Cdo = numpy.vectorize(Engine.Cdo_correlation)(copy.deepcopy(M))
+        Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
+        alpha = Pt_Ps * pressure / Pref
+        V = M * a
+        q = (1/2)* rho * V**2
+        thrust_loading = (beta/alpha) * ((q/beta/wing_loading) * (K1 * (n*beta*wing_loading/q)**2 + K2*(n*beta*wing_loading/q) + Cdo + CDR) + (VS/V) * (acceleration/g))
+        return thrust_loading
+
+    def constraint(self, data):
+        for idx, row in data.iterrows():
+            M = row["M"]
+            altitude = row["altitude"] * 0.3048 # m
+            beta = row["beta"]
+            n = row["n"]
+            VS = row["VS"]
+            K1 = row["K1"]
+            K2 = row["K2"]
+            CDR = row["CDR"]
+            acceleration = row["acceleration"]
+            sample_wing_loadings = numpy.linspace(20, 120, 200) * 47.88
+            thrust_loadings = numpy.vectorize(Engine.get_thrust_loading)(M, altitude, beta, sample_wing_loadings, n, K1, K2, CDR, VS, acceleration)
+            plt.scatter(sample_wing_loadings, thrust_loadings)
+        plt.show()
+
+    def mission(self, data):
+        Tref, Pref, _, _ = atmosphere(0)
+        gamma = 1.4
+        for idx, row in data.iterrows():
+            M = row["M"]
+            altitude = row["altitude"] * 0.3048 # m
+            beta = row["beta"]
+            n = row["n"]
+            VS = row["VS"]
+            K1 = row["K1"]
+            K2 = row["K2"]
+            CDR = row["CDR"]
+            acceleration = row["acceleration"]
+            wing_loading = row["wing loading"]
+            temperature, pressure, rho, a = atmosphere(altitude)
+            Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
+            alpha = Pt_Ps * pressure / Pref
+            TSFC = (0.9 + 0.3 * M)*numpy.sqrt(temperature/Tref)
+            thrust_loading = Engine.get_thrust_loading(M, altitude, beta, wing_loading, n, K1, K2, CDR, VS, acceleration)
+
     def optimize(self, performance_parameter): pass
     def sensitivity_study(self): pass
-
-
-    # Flight Performance
-    # def Cdo_correlation(Cdo):
-    #     if Cdo > 0.8: return 0.02 + ((Cdo - 0.8)*0.286) + (0.02*(0.2**2))
-    #     else: return 0.02 + (0.02*(0.2**2))
-
-    # def excess_power():
-    #     thrust_loading = 0.45
-    #     wing_loading = 45 * 47.88
-    #     n = 1
-    #     beta = 1
-    #     num_points = 100
-
-    #     M = numpy.linspace(0.000001, 1, num_points)
-    #     altitude = numpy.linspace(0, 60000, num_points) * 0.3048
-    #     ambient = list(map(atmosphere, list(altitude)))
-    #     temperature, pressure, rho, a = zip(*ambient)
-    #     temperature, pressure = numpy.meshgrid(temperature, pressure)
-    #     rho, a = numpy.meshgrid(rho, a)
-    #     temperature = temperature.T
-    #     rho = rho.T
-    #     M, altitude = numpy.meshgrid(M, altitude)
-
-    #     Cdo = numpy.vectorize(Cdo_correlation)(copy.deepcopy(M))
-    #     Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
-    #     alpha = Pt_Ps * pressure / Pref
-    #     V = M * a
-    #     q = (1/2)* rho * V**2
-    #     Ps = V * ((alpha/beta)*thrust_loading - K1*wing_loading*(n**2)*beta/q - K2*n - (Cdo/(beta*wing_loading/q)))
-    #     TSFC = (0.9 + 0.3 * M) * numpy.vectorize(math.sqrt)(temperature/Tref) 
-    #     fs = Ps / alpha / TSFC
-    #     fig, ax = plt.subplots()
-    #     contour = ax.contourf(M, altitude/0.3048, fs)
-    #     cbar = fig.colorbar(contour, ax=ax)
-    #     plt.show()
-
-    # def get_thrust_loading(M, altitude, beta, wing_loading, n, K1, K2, CDR, VS, acceleration):
-    #     temperature, pressure, rho, a = atmosphere(altitude)
-    #     Cdo = numpy.vectorize(Cdo_correlation)(copy.deepcopy(M))
-    #     Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
-    #     alpha = Pt_Ps * pressure / Pref
-    #     V = M * a
-    #     q = (1/2)* rho * V**2
-    #     thrust_loading = (beta/alpha) * ((q/beta/wing_loading) * (K1 * (n*beta*wing_loading/q)**2 + K2*(n*beta*wing_loading/q) + Cdo + CDR) + (VS/V) * (acceleration/g))
-
-    #     return thrust_loading
-
-    # def constraint(data):
-    #     for idx, row in data.iterrows():
-    #         M = row["M"]
-    #         altitude = row["altitude"] * 0.3048 # m
-    #         beta = row["beta"]
-    #         n = row["n"]
-    #         VS = row["VS"]
-    #         sample_wing_loadings = numpy.linspace(20, 120, 200) * 47.88
-    #         thrust_loadings = numpy.vectorize(get_thrust_loading)(M, altitude, beta, sample_wing_loadings, n, K1, K2, CDR, VS, acceleration)
-    #         plt.scatter(sample_wing_loadings, thrust_loadings)
-    #     plt.show()
-
-    # def mission(data):
-    #     for idx, row in data.iterrows():
-    #         M = row["M"]
-    #         altitude = row["altitude"] * 0.3048 # m
-    #         beta = row["beta"]
-    #         n = row["n"]
-    #         VS = row["VS"]
-    #         temperature, pressure, rho, a = atmosphere(altitude)
-    #         Pt_Ps = (1 + ((gamma - 1)/2) * M**2)**(gamma / (gamma - 1))
-    #         alpha = Pt_Ps * pressure / Pref
-    #         TSFC = (0.9 + 0.3 * M)*math.sqrt(temperature/Tref)
-    #         thrust_loading = get_thrust_loading(M, altitude, beta, wing_loading, n, K1, K2, CDR, VS, acceleration)
 
 
 ### TurboFans and Variable-Bypass Ramjets ###
