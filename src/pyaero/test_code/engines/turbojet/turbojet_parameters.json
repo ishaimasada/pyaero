@@ -1,0 +1,61 @@
+{
+    "spools": 1,
+    "TET": 1510,
+    "Minf": 0,
+    "altitude": 0,
+    "mdot": 0.53,
+    "LHV": 43100000,
+    "intake": {
+        "total pressure recovery": 0.98,
+        "inlet M": 0.1,
+        "exit M": 0.3
+    },
+    "compressors": [
+        {
+            "PR": 3.6,
+            "machine": "axial",
+            "e": 0.91,
+            "exit M": 0.4,
+            "inlet idx": 2,
+            "exit idx": 3,
+            "cooling": 0.0,
+            "packing": 0.0
+        }
+    ],
+    "recuperator": {
+        "pi_hot": 0.94,
+        "pi_cold": 0.94,
+        "delta_ht": 400,
+        "cold exit M": 0.2,
+        "hot exit M": 0.3
+    },
+    "burner": {
+        "total pressure loss": 0.05,
+        "efficiency": 0.99,
+        "exit M": 0.4
+    },
+    "turbines": [
+        {
+            "machine": "axial",
+            "e": 0.95,
+            "mechanical efficiency": 0.99,
+            "exit M": 0.43,
+            "exit idx": 5
+        }
+    ],
+    "afterburner": {
+        "toggle": true,
+        "efficiency": 0.99,
+        "AET": 1700,
+        "pi_hot": 0.94, 
+        "pi_cold": 0.94, 
+        "delta_ht": 400, 
+        "cold exit M": 0.2, 
+        "hot exit M": 0.3
+    },
+    "exhaust": {
+        "C/CD": "CD",
+        "discharge coefficient": 0.97,
+        "velocity coefficient": 0.98
+    }
+}

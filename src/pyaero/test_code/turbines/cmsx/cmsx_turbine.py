@@ -8,7 +8,7 @@ directory = os.path.dirname(filepath)
 os.chdir(directory)
 
 # Load parameters from JSON file
-with open("turbine_parameters.json", "r") as file:
+with open("cmsx_turbine_parameters.json", "r") as file:
     parameters = json.load(file)
 
 # Define the log path for the turbine
